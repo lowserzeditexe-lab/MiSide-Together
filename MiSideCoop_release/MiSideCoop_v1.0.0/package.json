@@ -1,8 +1,1 @@
-{
-  "name": "miside-coop-relay",
-  "version": "1.0.0",
-  "description": "Serveur de mise en relation pour le mod MiSide Co-op",
-  "main": "relay-server.js",
-  "scripts": { "start": "node relay-server.js" },
-  "dependencies": { "express": "^4.19.0" }
-}
+{"name":"miside-coop-relay","version":"1.0.0","main":"relay-server.js","scripts":{"start":"node relay-server.js"},"dependencies":{"express":"^4.19.0"}}

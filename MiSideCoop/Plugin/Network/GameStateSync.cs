@@ -7,13 +7,17 @@ namespace MiSideCoop.Network
     /// <summary>
     /// Synchronise les événements globaux entre hôte et invité :
     /// changements de scène, déclenchement/fin de cutscenes.
+    ///
+    /// Note IL2CPP : on n'utilise PAS SceneManager.sceneLoaded (UnityAction
+    /// strippé), on relit le nom de scène à chaque frame dans Update().
     /// </summary>
     public class GameStateSync : MonoBehaviour
     {
-
         public static GameStateSync Instance { get; private set; }
 
-        private string _currentScene;
+        private string _currentScene = string.Empty;
+        private float _checkTimer;
+        private const float CheckInterval = 0.5f;
 
         private void Awake()
         {
@@ -23,39 +27,45 @@ namespace MiSideCoop.Network
 
         private void Start()
         {
-            _currentScene = SceneManager.GetActiveScene().name;
-            SceneManager.sceneLoaded += OnSceneLoaded;
+            try { _currentScene = SceneManager.GetActiveScene().name; }
+            catch { _currentScene = string.Empty; }
         }
 
-        private void OnDestroy()
+        private void Update()
         {
-            SceneManager.sceneLoaded -= OnSceneLoaded;
+            _checkTimer += Time.deltaTime;
+            if (_checkTimer < CheckInterval) return;
+            _checkTimer = 0f;
+
+            string sceneName;
+            try { sceneName = SceneManager.GetActiveScene().name; }
+            catch { return; }
+
+            if (sceneName == _currentScene) return;
+            _currentScene = sceneName;
+            OnSceneChanged(sceneName);
         }
 
-        // ── Changement de scène (déclenché côté hôte) ─────────────────────────
-        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        private void OnSceneChanged(string sceneName)
         {
             var nm = CoopNetworkManager.Instance;
             if (nm == null || !nm.IsHost) return;
-            if (scene.name == _currentScene) return;
 
-            _currentScene = scene.name;
-
+            Vector3 spawnPos = Vector3.zero;
             var spawnPoint = GameObject.Find("SpawnPoint") ?? GameObject.Find("PlayerSpawn");
-            Vector3 spawnPos = spawnPoint != null ? spawnPoint.transform.position : Vector3.zero;
+            if (spawnPoint != null) spawnPos = spawnPoint.transform.position;
 
             nm.BroadcastSceneChange(new SceneChangeMessage
             {
-                SceneName     = scene.name,
+                SceneName     = sceneName,
                 SpawnPosition = spawnPos
             });
 
-            MiSideCoopPlugin.Logger.LogInfo($"[Co-op] Scène '{scene.name}' synchronisée avec l'invité.");
+            MiSideCoopPlugin.Logger.LogInfo($"[Co-op] Scène '{sceneName}' synchronisée avec l'invité.");
         }
 
         // ── Cutscenes ─────────────────────────────────────────────────────────
 
-        /// <summary>Appelé depuis un patch Harmony quand une cutscene démarre (côté hôte).</summary>
         public void BroadcastCutscene(string cutsceneId, bool start)
         {
             CoopNetworkManager.Instance?.BroadcastCutsceneMessage(new CutsceneMessage
@@ -65,7 +75,6 @@ namespace MiSideCoop.Network
             });
         }
 
-        /// <summary>Reçu côté client : applique la cutscene localement.</summary>
         public void TriggerCutscene(string cutsceneId, bool start)
         {
             var obj = GameObject.Find(cutsceneId);
