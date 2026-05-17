@@ -56,24 +56,26 @@ namespace MiSideCoop
             _harmony.PatchAll();
 
             Logger.LogInfo($"[MiSide Co-op] v{PluginInfo.PLUGIN_VERSION} chargé avec succès.");
-            Logger.LogInfo("[MiSide Co-op] Le menu co-op s'ouvre automatiquement. Appuyez sur F8 pour fermer/rouvrir.");
+            Logger.LogInfo("[MiSide Co-op] Le menu co-op s'ouvrira dès la première scène. F8 pour fermer/rouvrir.");
 
             // ── Bootstrap Unity ───────────────────────────────────────────────
-            // IMPORTANT : DontDestroyOnLoad est appelé depuis CoopBootstrap.Awake()
-            // (et non ici) pour garantir l'exécution dans le contexte main thread Unity.
-            EnsureBootstrap();
+            // IMPORTANT : NE PAS appeler EnsureBootstrap() ici !
+            // Pendant la phase Load() de BepInEx 6, Unity n'a pas encore initialisé
+            // son système de scènes → DontDestroyOnLoad ne fonctionne pas.
+            // Le bootstrap sera créé dans SceneManagerInternalLoadedPatch.Postfix
+            // qui s'exécute lors du PREMIER chargement de scène Unity (contexte OK).
         }
 
         /// <summary>
-        /// Crée ou recrée le bootstrap co-op si nécessaire.
-        /// Appelé au chargement ET automatiquement après chaque changement de scène
-        /// via le mécanisme BootstrapRecovery (ScenePatch).
+        /// Crée le bootstrap co-op si nécessaire.
+        /// DOIT être appelé uniquement depuis des patches qui s'exécutent après
+        /// l'initialisation complète du système de scènes Unity (pas depuis Load()).
         /// </summary>
         public static void EnsureBootstrap()
         {
             if (CoopBootstrap.Instance != null) return;
 
-            Logger?.LogInfo("[Co-op] Création / recréation du bootstrap...");
+            Logger?.LogInfo("[Co-op] Création du bootstrap co-op...");
             var go = new GameObject("MiSideCoopBootstrap");
             // DontDestroyOnLoad sera appelé dans CoopBootstrap.Awake()
             go.AddComponent<CoopBootstrap>();

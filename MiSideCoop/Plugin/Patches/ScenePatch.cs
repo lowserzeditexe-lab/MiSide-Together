@@ -7,17 +7,56 @@ using MiSideCoop.Utils;
 namespace MiSideCoop.Patches
 {
     /// <summary>
-    /// Patch SceneManager.LoadScene pour :
-    ///   1. Synchroniser les changements de scène entre hôte et invité (comportement original).
-    ///   2. S'assurer que le bootstrap co-op est recréé après chaque transition (v1.1).
+    /// Patches sur SceneManager pour :
+    ///   1. Recréer automatiquement le bootstrap co-op à chaque changement de scène.
+    ///   2. Loguer les transitions pour le mode co-op.
     ///
-    /// Robustesse IL2CPP :
-    ///   SceneManager.sceneLoaded est strippé dans ce build IL2CPP — on ne peut pas s'y
-    ///   abonner. On utilise donc un Postfix sur LoadScene pour créer un BootstrapRecovery
-    ///   (DontDestroyOnLoad) qui appelle EnsureBootstrap() dans le contexte nouvelle scène.
+    /// Stratégie IL2CPP :
+    ///   • SceneManager.sceneLoaded est strippé dans ce build → inutilisable.
+    ///   • Patch PRIMAIRE : Internal_SceneLoaded (méthode interne Unity appelée par le
+    ///     moteur natif pour TOUT changement de scène, y compris le tout premier).
+    ///   • Patches SECONDAIRES : toutes les surcharges publiques de LoadScene /
+    ///     LoadSceneAsync (on ne sait pas laquelle MiSide utilise).
+    ///   • EnsureBootstrap() doit être appelé UNIQUEMENT depuis ces patches (pas depuis
+    ///     Load() où Unity n'est pas encore initialisé).
     /// </summary>
 
-    // ── Patch par nom ─────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // PATCH PRIMAIRE — capture 100 % des transitions de scène
+    // ══════════════════════════════════════════════════════════════════════════
+
+    [HarmonyPatch(typeof(SceneManager), "Internal_SceneLoaded")]
+    public static class SceneManagerInternalLoadedPatch
+    {
+        /// <summary>
+        /// Fires après CHAQUE chargement de scène (même le tout premier).
+        /// Exécuté dans le contexte Unity pleinement initialisé → DontDestroyOnLoad fonctionne.
+        /// </summary>
+        [HarmonyPostfix]
+        public static void Postfix(Scene scene, LoadSceneMode mode)
+        {
+            MiSideCoopPlugin.EnsureBootstrap();
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // PATCHES SECONDAIRES — filet de sécurité sur toutes les surcharges publiques
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // ── LoadScene(string) ─────────────────────────────────────────────────────
+    [HarmonyPatch(typeof(SceneManager), nameof(SceneManager.LoadScene),
+        new[] { typeof(string) })]
+    public static class ScenePatchByNameOnly
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(string sceneName) => true;
+
+        [HarmonyPostfix]
+        public static void Postfix(string sceneName)
+            => ScenePatchHelper.SpawnRecovery();
+    }
+
+    // ── LoadScene(string, LoadSceneMode) ──────────────────────────────────────
     [HarmonyPatch(typeof(SceneManager), nameof(SceneManager.LoadScene),
         new[] { typeof(string), typeof(LoadSceneMode) })]
     public static class ScenePatchByName
@@ -25,18 +64,7 @@ namespace MiSideCoop.Patches
         [HarmonyPrefix]
         public static bool Prefix(string sceneName, LoadSceneMode mode)
         {
-            var nm = CoopNetworkManager.Instance;
-            if (nm == null || !nm.IsConnected) return true;
-
-            if (!nm.IsHost)
-            {
-                MiSideCoopPlugin.Logger.LogDebug(
-                    $"[ScenePatch] Client : chargement de '{sceneName}' autorisé.");
-                return true;
-            }
-
-            MiSideCoopPlugin.Logger.LogDebug(
-                $"[ScenePatch] Hôte : chargement de scène '{sceneName}' → sera synchronisé.");
+            ScenePatchHelper.LogCoopScene(sceneName, mode);
             return true;
         }
 
@@ -48,25 +76,26 @@ namespace MiSideCoop.Patches
         }
     }
 
-    // ── Patch par index ───────────────────────────────────────────────────────
+    // ── LoadScene(int) ────────────────────────────────────────────────────────
+    [HarmonyPatch(typeof(SceneManager), nameof(SceneManager.LoadScene),
+        new[] { typeof(int) })]
+    public static class ScenePatchByIndexOnly
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(int sceneBuildIndex) => true;
+
+        [HarmonyPostfix]
+        public static void Postfix(int sceneBuildIndex)
+            => ScenePatchHelper.SpawnRecovery();
+    }
+
+    // ── LoadScene(int, LoadSceneMode) ─────────────────────────────────────────
     [HarmonyPatch(typeof(SceneManager), nameof(SceneManager.LoadScene),
         new[] { typeof(int), typeof(LoadSceneMode) })]
     public static class ScenePatchByIndex
     {
         [HarmonyPrefix]
-        public static bool Prefix(int sceneBuildIndex, LoadSceneMode mode)
-        {
-            var nm = CoopNetworkManager.Instance;
-            if (nm == null || !nm.IsConnected) return true;
-
-            if (nm.IsHost)
-            {
-                string scenePath = SceneUtility.GetScenePathByBuildIndex(sceneBuildIndex);
-                MiSideCoopPlugin.Logger.LogDebug(
-                    $"[ScenePatch] Hôte : chargement scène index {sceneBuildIndex} ({scenePath}).");
-            }
-            return true;
-        }
+        public static bool Prefix(int sceneBuildIndex, LoadSceneMode mode) => true;
 
         [HarmonyPostfix]
         public static void Postfix(int sceneBuildIndex, LoadSceneMode mode)
@@ -76,21 +105,26 @@ namespace MiSideCoop.Patches
         }
     }
 
-    // ── Patch async ───────────────────────────────────────────────────────────
+    // ── LoadSceneAsync(string) ────────────────────────────────────────────────
+    [HarmonyPatch(typeof(SceneManager), nameof(SceneManager.LoadSceneAsync),
+        new[] { typeof(string) })]
+    public static class ScenePatchAsyncNameOnly
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(string sceneName) => true;
+
+        [HarmonyPostfix]
+        public static void Postfix(string sceneName)
+            => ScenePatchHelper.SpawnRecovery();
+    }
+
+    // ── LoadSceneAsync(string, LoadSceneMode) ─────────────────────────────────
     [HarmonyPatch(typeof(SceneManager), nameof(SceneManager.LoadSceneAsync),
         new[] { typeof(string), typeof(LoadSceneMode) })]
     public static class ScenePatchAsync
     {
         [HarmonyPrefix]
-        public static bool Prefix(string sceneName, LoadSceneMode mode)
-        {
-            var nm = CoopNetworkManager.Instance;
-            if (nm == null || !nm.IsConnected) return true;
-
-            MiSideCoopPlugin.Logger.LogDebug(
-                $"[ScenePatch] LoadSceneAsync '{sceneName}' intercepté.");
-            return true;
-        }
+        public static bool Prefix(string sceneName, LoadSceneMode mode) => true;
 
         [HarmonyPostfix]
         public static void Postfix(string sceneName, LoadSceneMode mode)
@@ -100,18 +134,60 @@ namespace MiSideCoop.Patches
         }
     }
 
-    // ── Helper interne partagé ────────────────────────────────────────────────
+    // ── LoadSceneAsync(int) ───────────────────────────────────────────────────
+    [HarmonyPatch(typeof(SceneManager), nameof(SceneManager.LoadSceneAsync),
+        new[] { typeof(int) })]
+    public static class ScenePatchAsyncIndexOnly
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(int sceneBuildIndex) => true;
+
+        [HarmonyPostfix]
+        public static void Postfix(int sceneBuildIndex)
+            => ScenePatchHelper.SpawnRecovery();
+    }
+
+    // ── LoadSceneAsync(int, LoadSceneMode) ────────────────────────────────────
+    [HarmonyPatch(typeof(SceneManager), nameof(SceneManager.LoadSceneAsync),
+        new[] { typeof(int), typeof(LoadSceneMode) })]
+    public static class ScenePatchAsyncIndex
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(int sceneBuildIndex, LoadSceneMode mode) => true;
+
+        [HarmonyPostfix]
+        public static void Postfix(int sceneBuildIndex, LoadSceneMode mode)
+        {
+            if (mode == LoadSceneMode.Single)
+                ScenePatchHelper.SpawnRecovery();
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // HELPERS
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Crée un BootstrapRecovery persistant (DontDestroyOnLoad) qui s'assure
+    /// que le bootstrap co-op est recréé dans la nouvelle scène si nécessaire.
+    /// </summary>
     internal static class ScenePatchHelper
     {
-        /// <summary>
-        /// Crée un BootstrapRecovery persistant (DontDestroyOnLoad) qui recréera
-        /// le bootstrap co-op dans la nouvelle scène si nécessaire.
-        /// </summary>
         internal static void SpawnRecovery()
         {
             var go = new GameObject("_MiCoopRecovery_");
-            // DontDestroyOnLoad sera appelé dans BootstrapRecovery.Awake()
             go.AddComponent<BootstrapRecovery>();
+            // DontDestroyOnLoad est appelé dans BootstrapRecovery.Awake()
+        }
+
+        internal static void LogCoopScene(string sceneName, LoadSceneMode mode)
+        {
+            var nm = CoopNetworkManager.Instance;
+            if (nm == null || !nm.IsConnected) return;
+            MiSideCoopPlugin.Logger?.LogDebug(
+                $"[ScenePatch] '{sceneName}' ({mode}) — co-op {(nm.IsHost ? "hôte" : "client")}.");
         }
     }
+
+    // ── Méthode utilitaire accessible depuis les patches ──────────────────────
 }
