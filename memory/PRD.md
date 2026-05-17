@@ -148,6 +148,9 @@ Résolution **à runtime** via `AccessTools.TypeByName("…")` — aucune réfé
 - **v1.0.3** — **Migration vers uGUI** (Canvas + GameObjects) suite à `GUIStateObjects.GetStateObject` strippé. IMGUI abandonné définitivement car non utilisé par le jeu et fortement strippé. Référence ajoutée à `Refs/UnityEngine.UI.dll`. UI = Canvas + Image + Text + Button + InputField (assemblies garanties présentes car le jeu les utilise).
 - **v1.1.1** — **Fix font search IL2CPP** : `Scene.GetRootGameObjects()` strippé dans le build MiSide (Method not found). Remplacé par `Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"/"Arial.ttf")` (immune au stripping). Fallback `Camera.main.transform.root` conservé.
 - **v1.1.1** — **Fix DontDestroyOnLoad sur Canvas** : warning Unity "DontDestroyOnLoad only works for root GameObjects" éliminé. Le Canvas est désormais parenté au bootstrap (déjà persistant) au lieu d'appeler `DontDestroyOnLoad` séparément. Persistance héritée via parent — ScreenSpaceOverlay non affecté.
+- **v1.1.2** — **Fix `GetComponent(System.Type)` strippé** : surcharge non-générique non disponible dans MiSide → migration totale vers la générique `GetComponent<Text>()` dans `ScanTransformForFont` et `ApplyFontRecursive`. Élimine le spam frame-par-frame "Method not found: 'UnityEngine.Component.GetComponent(System.Type)'".
+- **v1.1.2** — **Fix re-déclenchement infini de `ApplyFontEverywhere`** : `_fontApplied = true` maintenant positionné AVANT le try (au lieu d'après le succès) — sans ça toute exception laissait `_fontApplied = false` et le check `Update()` re-tentait à 60 Hz.
+- **v1.1.2** — **Ordre des fonts intégrées** : `Arial.ttf` testé en premier (confirmé présent sur MiSide v1.1.1), `LegacyRuntime.ttf` en fallback. Évite l'erreur Unity native "could not be loaded from the resource file!" sur les builds 2021.3.
 
 ## 🔧 Credentials / Secrets
 N/A (mode peer-to-peer, pas d'authentification).
