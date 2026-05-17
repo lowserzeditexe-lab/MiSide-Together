@@ -58,6 +58,12 @@ cp -r "$TEMPLATE_DIR" "$DST"
 # Remplace le DLL partout où il apparaît
 find "$DST" -name "MiSideCoop.dll" -exec cp "$SCRIPT_DIR/bin/Release/MiSideCoop.dll" {} \;
 
+# Synchronise le serveur de relais (peut évoluer entre versions, ex. v1.1.7
+# a ajouté l'alias GET /register/:code/:port IL2CPP-safe).
+if [[ -f "$SCRIPT_DIR/relay-server.js" ]]; then
+    cp "$SCRIPT_DIR/relay-server.js" "$DST/relay-server.js"
+fi
+
 # Synchronise les sources C# (sans .git)
 rsync -a --delete "$SCRIPT_DIR/Plugin/" "$DST/src/Plugin/"
 
