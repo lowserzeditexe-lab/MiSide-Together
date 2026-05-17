@@ -140,12 +140,14 @@ Résolution **à runtime** via `AccessTools.TypeByName("…")` — aucune réfé
 - Strings UTF-16 dans le DLL : `PlayerMove`, `ObjectDoor`, `ObjectInteractive`, `ObjectInteractiveItemTake` → tous présents
 - Relay Node.js : `GET /health`, `POST /register`, `GET /resolve/:code` → **OK**
 
-## 📝 Historique des fixes IL2CPP (v1.0.x)
+## 📝 Historique des fixes IL2CPP (v1.0.x / v1.1.x)
 - **v1.0.1** — DontDestroyOnLoad : bootstrap déplacé dans `Internal_SceneLoaded` + `BootstrapRecovery` failsafe
 - **v1.0.1** — `GUI.WindowFunction..ctor` : remplacé `GUI.Window` par `GUI.Box` + `GUILayout.BeginArea`
 - **v1.0.1** — `RectOffset..ctor(int,int,int,int)` : suppression du ctor multi-args ; fallback `GUI.skin.*`
 - **v1.0.2** — `GUILayout.BeginArea` strippé : migration tous les écrans vers `GUI.*` absolu (sans GUILayout)
 - **v1.0.3** — **Migration vers uGUI** (Canvas + GameObjects) suite à `GUIStateObjects.GetStateObject` strippé. IMGUI abandonné définitivement car non utilisé par le jeu et fortement strippé. Référence ajoutée à `Refs/UnityEngine.UI.dll`. UI = Canvas + Image + Text + Button + InputField (assemblies garanties présentes car le jeu les utilise).
+- **v1.1.1** — **Fix font search IL2CPP** : `Scene.GetRootGameObjects()` strippé dans le build MiSide (Method not found). Remplacé par `Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"/"Arial.ttf")` (immune au stripping). Fallback `Camera.main.transform.root` conservé.
+- **v1.1.1** — **Fix DontDestroyOnLoad sur Canvas** : warning Unity "DontDestroyOnLoad only works for root GameObjects" éliminé. Le Canvas est désormais parenté au bootstrap (déjà persistant) au lieu d'appeler `DontDestroyOnLoad` séparément. Persistance héritée via parent — ScreenSpaceOverlay non affecté.
 
 ## 🔧 Credentials / Secrets
 N/A (mode peer-to-peer, pas d'authentification).

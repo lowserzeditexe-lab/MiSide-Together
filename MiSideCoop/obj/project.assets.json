@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 3,
   "targets": {
     "net6.0": {
       "AsmResolver/6.0.0-beta.1": {
@@ -4850,7 +4850,6 @@
       },
       "frameworks": {
         "net6.0": {
-          "framework": "net6.0",
           "targetAlias": "net6.0",
           "projectReferences": {}
         }
@@ -4864,12 +4863,10 @@
         "enableAudit": "true",
         "auditLevel": "low",
         "auditMode": "direct"
-      },
-      "SdkAnalysisLevel": "10.0.300"
+      }
     },
     "frameworks": {
       "net6.0": {
-        "framework": "net6.0",
         "targetAlias": "net6.0",
         "dependencies": {
           "BepInEx.PluginInfoProps": {
@@ -4913,7 +4910,7 @@
             "privateAssets": "all"
           }
         },
-        "runtimeIdentifierGraphPath": "/root/.dotnet/sdk/10.0.300/RuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "/root/.dotnet/sdk/8.0.421/RuntimeIdentifierGraph.json"
       }
     }
   }
