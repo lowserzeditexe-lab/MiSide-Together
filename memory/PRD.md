@@ -46,8 +46,8 @@ Résolution **à runtime** via `AccessTools.TypeByName("…")` — aucune réfé
 - Testé et fonctionnel localement
 
 ### Livrable final
-- `/app/MiSideCoop_release/MiSideCoop_v1.0.1.zip` (90 KB) — **dernière version**
-- `/app/MiSideCoop_release/MiSideCoop_v1.0.0.zip` (64 KB) — version initiale
+- `/app/MiSideCoop_release/MiSideCoop_v1.0.3.zip` (96 KB) — **dernière version (uGUI)**
+- Versions précédentes (v1.0.0 → v1.0.2) conservées pour historique
 - Contient : `MiSideCoop.dll` compilé, `relay-server.js`, `package.json`, `install.bat/.sh`, README détaillé, sources complètes dans `src/`
 - **Script de build automatisé** : `/app/MiSideCoop/build_release.sh` — incrémente la version automatiquement et produit `MiSideCoop_v<X.Y.Z>.zip`
 
@@ -140,10 +140,12 @@ Résolution **à runtime** via `AccessTools.TypeByName("…")` — aucune réfé
 - Strings UTF-16 dans le DLL : `PlayerMove`, `ObjectDoor`, `ObjectInteractive`, `ObjectInteractiveItemTake` → tous présents
 - Relay Node.js : `GET /health`, `POST /register`, `GET /resolve/:code` → **OK**
 
-## 📝 Historique des fixes IL2CPP (v1.0.1)
-- **DontDestroyOnLoad** : bootstrap déplacé dans `Internal_SceneLoaded` + `BootstrapRecovery` failsafe
-- **`GUI.WindowFunction..ctor`** : remplacé `GUI.Window` par `GUI.Box` + `GUILayout.BeginArea`
-- **`UnityEngine.RectOffset..ctor(int,int,int,int)`** : suppression du ctor multi-args ; padding hérité de `GUI.skin.button`. `InitStyles()` enveloppé dans try/catch avec fallbacks (`GUI.skin.*`) pour résilience IL2CPP.
+## 📝 Historique des fixes IL2CPP (v1.0.x)
+- **v1.0.1** — DontDestroyOnLoad : bootstrap déplacé dans `Internal_SceneLoaded` + `BootstrapRecovery` failsafe
+- **v1.0.1** — `GUI.WindowFunction..ctor` : remplacé `GUI.Window` par `GUI.Box` + `GUILayout.BeginArea`
+- **v1.0.1** — `RectOffset..ctor(int,int,int,int)` : suppression du ctor multi-args ; fallback `GUI.skin.*`
+- **v1.0.2** — `GUILayout.BeginArea` strippé : migration tous les écrans vers `GUI.*` absolu (sans GUILayout)
+- **v1.0.3** — **Migration vers uGUI** (Canvas + GameObjects) suite à `GUIStateObjects.GetStateObject` strippé. IMGUI abandonné définitivement car non utilisé par le jeu et fortement strippé. Référence ajoutée à `Refs/UnityEngine.UI.dll`. UI = Canvas + Image + Text + Button + InputField (assemblies garanties présentes car le jeu les utilise).
 
 ## 🔧 Credentials / Secrets
 N/A (mode peer-to-peer, pas d'authentification).

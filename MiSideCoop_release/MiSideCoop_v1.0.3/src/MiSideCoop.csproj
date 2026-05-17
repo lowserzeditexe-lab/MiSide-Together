@@ -38,14 +38,6 @@
     <PackageReference Include="UnityEngine.Modules" Version="2021.3.18" IncludeAssets="compile" />
   </ItemGroup>
 
-  <!-- Référence locale : UnityEngine.UI (uGUI - Button, Text, InputField) -->
-  <ItemGroup>
-    <Reference Include="UnityEngine.UI">
-      <HintPath>Refs\UnityEngine.UI.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-  </ItemGroup>
-
   <!-- ================================================================
        Fichiers sources C#
        ================================================================ -->
