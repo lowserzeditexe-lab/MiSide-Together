@@ -42,8 +42,7 @@ namespace MiSideCoop.UI
         private GUIStyle _hudStyle;
         private bool     _stylesReady;
 
-        // Fenêtre draggable
-        private Rect _windowRect = new Rect(0, 0, 520, 420);
+        // Fenêtre — largeur/hauteur définies dans OnGUI (constantes W, H)
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
         private void Start()
@@ -86,23 +85,28 @@ namespace MiSideCoop.UI
 
             if (_state == MenuState.Closed) return;
 
-            // Fond sombre
+            // Fond sombre plein écran
             var oldColor = GUI.color;
             GUI.color = new Color(0f, 0f, 0f, 0.72f);
             GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), Texture2D.whiteTexture);
             GUI.color = oldColor;
 
-            // Centre la fenêtre
-            _windowRect.x = (Screen.width  - _windowRect.width)  * 0.5f;
-            _windowRect.y = (Screen.height - _windowRect.height) * 0.5f;
+            // Position centrée (calculée chaque frame — pas de drag nécessaire)
+            const float W = 520f, H = 440f;
+            float x = (Screen.width  - W) * 0.5f;
+            float y = (Screen.height - H) * 0.5f;
 
-            _windowRect = GUI.Window(
-                9876, _windowRect, DrawWindow,
-                "  MiSide Co-op — Mode Coopératif  ",
-                _windowStyle);
+            // Fond + titre de la fenêtre (GUI.Box, pas GUI.Window → pas de WindowFunction delegate)
+            GUI.Box(new Rect(x, y, W, H), "  MiSide Co-op — Mode Coopératif  ", _windowStyle);
+
+            // Contenu dans une zone GUILayout
+            GUILayout.BeginArea(new Rect(x + 12f, y + 32f, W - 24f, H - 44f));
+            DrawWindowContent();
+            GUILayout.EndArea();
         }
 
-        private void DrawWindow(int id)
+        /// <summary>Appelé directement (pas comme delegate) → compatible IL2CPP.</summary>
+        private void DrawWindowContent()
         {
             GUILayout.Space(8);
 
@@ -126,7 +130,7 @@ namespace MiSideCoop.UI
             }
 
             GUILayout.Space(6);
-            GUI.DragWindow();
+            // GUI.DragWindow() supprimé — la fenêtre est centrée automatiquement, pas de drag nécessaire
         }
 
         // ── Écran principal ───────────────────────────────────────────────────
