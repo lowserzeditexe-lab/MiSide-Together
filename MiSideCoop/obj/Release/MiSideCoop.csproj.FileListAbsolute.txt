@@ -1,0 +1,13 @@
+/app/MiSideCoop/obj/Release/MiSideCoop.csproj.AssemblyReference.cache
+/app/MiSideCoop/obj/Release/MiSideCoop.GeneratedMSBuildEditorConfig.editorconfig
+/app/MiSideCoop/obj/Release/MiSideCoop.AssemblyInfoInputs.cache
+/app/MiSideCoop/obj/Release/MiSideCoop.AssemblyInfo.cs
+/app/MiSideCoop/obj/Release/MiSideCoop.csproj.CoreCompileInputs.cache
+/app/MiSideCoop/obj/Release/MyPluginInfo.cs
+/app/MiSideCoop/bin/Release/MiSideCoop.deps.json
+/app/MiSideCoop/bin/Release/MiSideCoop.dll
+/app/MiSideCoop/bin/Release/MiSideCoop.pdb
+/app/MiSideCoop/obj/Release/MiSideCoop.dll
+/app/MiSideCoop/obj/Release/refint/MiSideCoop.dll
+/app/MiSideCoop/obj/Release/MiSideCoop.pdb
+/app/MiSideCoop/obj/Release/ref/MiSideCoop.dll
