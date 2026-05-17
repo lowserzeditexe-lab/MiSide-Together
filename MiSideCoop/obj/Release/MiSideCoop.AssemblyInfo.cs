@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("MiSideCoop")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b5479792a861f7b63af6b2653b9e4512c86c9de2")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+eaf964976a66bb1433d4b238b27415774d332db3")]
 [assembly: System.Reflection.AssemblyProductAttribute("MiSideCoop")]
 [assembly: System.Reflection.AssemblyTitleAttribute("MiSideCoop")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
