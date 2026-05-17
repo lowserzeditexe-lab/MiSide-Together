@@ -1,0 +1,151 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ================================================================
+       MiSide Co-op Mod — Fichier de projet MSBuild
+       Compilez avec : dotnet build MiSideCoop.csproj -c Release
+       Ou avec Visual Studio 2022+ (solution incluse optionnelle).
+
+       IMPORTANT : Adaptez les chemins GamePath et BepInExPath
+                   à votre installation locale si nécessaire.
+       ================================================================ -->
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>MiSideCoop</AssemblyName>
+    <RootNamespace>MiSideCoop</RootNamespace>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <Optimize>true</Optimize>
+    <Platforms>x64</Platforms>
+    <OutputPath>bin\Release\</OutputPath>
+  </PropertyGroup>
+
+  <!-- ================================================================
+       Chemins par défaut — modifiables via propriétés MSBuild :
+         dotnet build -p:GamePath="D:\Games\MiSide"
+       ================================================================ -->
+  <PropertyGroup>
+    <GamePath Condition="'$(GamePath)' == ''">C:\Program Files (x86)\Steam\steamapps\common\MiSide</GamePath>
+    <BepInExPath>$(GamePath)\BepInEx</BepInExPath>
+    <ManagedPath>$(GamePath)\MiSide_Data\Managed</ManagedPath>
+    <PluginOutPath>$(BepInExPath)\plugins\MiSideCoop</PluginOutPath>
+  </PropertyGroup>
+
+  <!-- ================================================================
+       Références BepInEx 6 (IL2CPP)
+       ================================================================ -->
+  <ItemGroup Label="BepInEx">
+    <Reference Include="BepInEx.Core">
+      <HintPath>$(BepInExPath)\core\BepInEx.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx.Unity.IL2CPP">
+      <HintPath>$(BepInExPath)\core\BepInEx.Unity.IL2CPP.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExPath)\core\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppInterop.Runtime">
+      <HintPath>$(BepInExPath)\core\Il2CppInterop.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="MonoMod.Utils">
+      <HintPath>$(BepInExPath)\core\MonoMod.Utils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- ================================================================
+       Assemblies Unity (extraites du dossier Managed du jeu)
+       ================================================================ -->
+  <ItemGroup Label="Unity">
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedPath)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(ManagedPath)\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>$(ManagedPath)\UnityEngine.AnimationModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(ManagedPath)\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ManagedPath)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UnityWebRequestModule">
+      <HintPath>$(ManagedPath)\UnityEngine.UnityWebRequestModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.SceneManagementModule">
+      <HintPath>$(ManagedPath)\UnityEngine.SceneManagementModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(ManagedPath)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- ================================================================
+       Mirror Networking + Telepathy Transport
+       Placez Mirror.dll et Telepathy.dll dans le dossier :
+         BepInEx\plugins\MiSideCoop\
+       Téléchargement : https://github.com/MirrorNetworking/Mirror/releases
+       ================================================================ -->
+  <ItemGroup Label="Mirror">
+    <Reference Include="Mirror">
+      <HintPath>$(PluginOutPath)\Mirror.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Telepathy">
+      <HintPath>$(PluginOutPath)\Telepathy.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- ================================================================
+       Fichiers sources C#
+       ================================================================ -->
+  <ItemGroup Label="Sources">
+    <Compile Include="Plugin\PluginInfo.cs" />
+    <Compile Include="Plugin\MiSideCoopPlugin.cs" />
+    <Compile Include="Plugin\CoopBootstrap.cs" />
+    <Compile Include="Plugin\Network\NetworkMessages.cs" />
+    <Compile Include="Plugin\Network\CoopNetworkManager.cs" />
+    <Compile Include="Plugin\Network\PlayerAvatar.cs" />
+    <Compile Include="Plugin\Network\AvatarAnimatorSync.cs" />
+    <Compile Include="Plugin\Network\GameStateSync.cs" />
+    <Compile Include="Plugin\Avatars\Player1Avatar.cs" />
+    <Compile Include="Plugin\Avatars\Player2Avatar.cs" />
+    <Compile Include="Plugin\Relay\RoomManager.cs" />
+    <Compile Include="Plugin\Patches\MovementPatch.cs" />
+    <Compile Include="Plugin\Patches\InteractionPatch.cs" />
+    <Compile Include="Plugin\Patches\DoorPatch.cs" />
+    <Compile Include="Plugin\Patches\PickupPatch.cs" />
+    <Compile Include="Plugin\Patches\ScenePatch.cs" />
+    <Compile Include="Plugin\UI\CoopMenuUI.cs" />
+  </ItemGroup>
+
+  <!-- ================================================================
+       Post-build : copie automatique vers le dossier plugins du jeu
+       (optionnel — nécessite que GamePath soit correct)
+       ================================================================ -->
+  <Target Name="DeployToGame" AfterTargets="Build"
+          Condition="Exists('$(PluginOutPath)')">
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll"
+          DestinationFolder="$(PluginOutPath)"
+          SkipUnchangedFiles="true" />
+    <Message Text="[MiSideCoop] DLL déployée vers $(PluginOutPath)" Importance="high" />
+  </Target>
+
+</Project>
