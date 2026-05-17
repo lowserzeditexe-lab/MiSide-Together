@@ -46,8 +46,10 @@ Résolution **à runtime** via `AccessTools.TypeByName("…")` — aucune réfé
 - Testé et fonctionnel localement
 
 ### Livrable final
-- `/app/MiSideCoop_release/MiSideCoop_v1.0.0.zip` (64 KB)
-- Contient : `MiSideCoop.dll` (50 KB compilé), `relay-server.js`, `package.json`, `install.bat/.sh`, README détaillé, sources complètes dans `src/`
+- `/app/MiSideCoop_release/MiSideCoop_v1.0.1.zip` (90 KB) — **dernière version**
+- `/app/MiSideCoop_release/MiSideCoop_v1.0.0.zip` (64 KB) — version initiale
+- Contient : `MiSideCoop.dll` compilé, `relay-server.js`, `package.json`, `install.bat/.sh`, README détaillé, sources complètes dans `src/`
+- **Script de build automatisé** : `/app/MiSideCoop/build_release.sh` — incrémente la version automatiquement et produit `MiSideCoop_v<X.Y.Z>.zip`
 
 ---
 
@@ -134,9 +136,14 @@ Résolution **à runtime** via `AccessTools.TypeByName("…")` — aucune réfé
 ---
 
 ## 🧪 Tests effectués
-- Build C# `.NET 10 SDK` : **succès** (50688 octets)
+- Build C# `.NET 10 SDK` : **succès** (v1.0.1 — 0 warning, 0 error)
 - Strings UTF-16 dans le DLL : `PlayerMove`, `ObjectDoor`, `ObjectInteractive`, `ObjectInteractiveItemTake` → tous présents
 - Relay Node.js : `GET /health`, `POST /register`, `GET /resolve/:code` → **OK**
+
+## 📝 Historique des fixes IL2CPP (v1.0.1)
+- **DontDestroyOnLoad** : bootstrap déplacé dans `Internal_SceneLoaded` + `BootstrapRecovery` failsafe
+- **`GUI.WindowFunction..ctor`** : remplacé `GUI.Window` par `GUI.Box` + `GUILayout.BeginArea`
+- **`UnityEngine.RectOffset..ctor(int,int,int,int)`** : suppression du ctor multi-args ; padding hérité de `GUI.skin.button`. `InitStyles()` enveloppé dans try/catch avec fallbacks (`GUI.skin.*`) pour résilience IL2CPP.
 
 ## 🔧 Credentials / Secrets
 N/A (mode peer-to-peer, pas d'authentification).
