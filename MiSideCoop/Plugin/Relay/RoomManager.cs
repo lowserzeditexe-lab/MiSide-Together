@@ -29,6 +29,11 @@ namespace MiSideCoop.Relay
             Instance = this;
         }
 
+        private void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+        }
+
         // ── Génération locale du code ─────────────────────────────────────────
 
         public string GenerateRoomCode()

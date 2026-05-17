@@ -9,21 +9,66 @@ namespace MiSideCoop
     /// <summary>
     /// MonoBehaviour créé au démarrage du plugin. Attache tous les composants
     /// co-op sur un objet persistant (DontDestroyOnLoad).
+    ///
+    /// Corrections IL2CPP v1.1 :
+    ///   • DontDestroyOnLoad appelé depuis Awake() (contexte Unity main-thread)
+    ///     et non depuis Plugin.Load() (trop tôt).
+    ///   • transform.SetParent(null) imposé avant DontDestroyOnLoad pour
+    ///     satisfaire la contrainte "root GameObject uniquement".
+    ///   • Instance nettoyée dans OnDestroy() pour permettre la recréation
+    ///     automatique via EnsureBootstrap / BootstrapRecovery.
     /// </summary>
     public class CoopBootstrap : MonoBehaviour
     {
+        // ── Singleton ─────────────────────────────────────────────────────────
+        public static CoopBootstrap Instance { get; private set; }
 
         private CoopMenuUI         _menuUI;
         private CoopNetworkManager _networkManager;
 
         private void Awake()
         {
+            // ① Garantit que l'objet est à la racine (exigence de DontDestroyOnLoad)
+            if (transform.parent != null)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    "[Co-op] Bootstrap avait un parent inattendu – correction appliquée.");
+                transform.SetParent(null);
+            }
+
+            // ② Garde-fou singleton : si une instance existe déjà, on se suicide
+            if (Instance != null)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    "[Co-op] Instance bootstrap déjà active – destruction du doublon.");
+                Destroy(gameObject);
+                return;
+            }
+            Instance = this;
+
+            // ③ Rend l'objet persistant entre toutes les scènes
+            DontDestroyOnLoad(gameObject);
+            MiSideCoopPlugin.Logger?.LogInfo(
+                "[Co-op] Bootstrap marqué DontDestroyOnLoad – menu co-op actif.");
+
+            // ④ Attache les composants co-op sur ce même objet
             _networkManager = gameObject.AddComponent<CoopNetworkManager>();
             _menuUI         = gameObject.AddComponent<CoopMenuUI>();
             gameObject.AddComponent<GameStateSync>();
             gameObject.AddComponent<RoomManager>();
         }
 
+        private void OnDestroy()
+        {
+            if (Instance == this)
+            {
+                Instance = null;
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    "[Co-op] Bootstrap détruit – sera recréé au prochain changement de scène.");
+            }
+        }
+
+        // ── Raccourci clavier ─────────────────────────────────────────────────
         private void Update()
         {
             if (Input.GetKeyDown(KeyCode.F8))

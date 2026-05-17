@@ -9,19 +9,20 @@ using MiSideCoop.Network;
 using MiSideCoop.UI;
 using MiSideCoop.Relay;
 using MiSideCoop.Avatars;
+using MiSideCoop.Utils;
 
 namespace MiSideCoop
 {
     [BepInPlugin(PluginInfo.PLUGIN_GUID, PluginInfo.PLUGIN_NAME, PluginInfo.PLUGIN_VERSION)]
     public class MiSideCoopPlugin : BasePlugin
     {
-        public static ManualLogSource Logger  { get; private set; }
+        public static ManualLogSource Logger   { get; private set; }
         public static MiSideCoopPlugin Instance { get; private set; }
 
-        public static ConfigEntry<string> RelayServerUrl    { get; private set; }
-        public static ConfigEntry<int>    NetworkPort       { get; private set; }
-        public static ConfigEntry<string> Player2SkinColor  { get; private set; }
-        public static ConfigEntry<string> LocalPlayerName   { get; private set; }
+        public static ConfigEntry<string> RelayServerUrl   { get; private set; }
+        public static ConfigEntry<int>    NetworkPort      { get; private set; }
+        public static ConfigEntry<string> Player2SkinColor { get; private set; }
+        public static ConfigEntry<string> LocalPlayerName  { get; private set; }
 
         private Harmony _harmony;
 
@@ -37,11 +38,11 @@ namespace MiSideCoop
 
             NetworkPort = Config.Bind(
                 "Network", "Port", 7777,
-                "Port TCP Mirror/Telepathy. L'hôte doit l'ouvrir dans son pare-feu.");
+                "Port TCP. L'hôte doit l'ouvrir dans son pare-feu.");
 
             Player2SkinColor = Config.Bind(
                 "Avatar", "Player2SkinColor", "Blue",
-                "Couleur du skin du Joueur 2. Valeurs acceptées : Red, Blue, Green, Yellow, Purple, Orange, White.");
+                "Couleur du skin du Joueur 2. Valeurs : Red, Blue, Green, Yellow, Purple, Orange, White.");
 
             LocalPlayerName = Config.Bind(
                 "General", "PlayerName", "Player2",
@@ -55,14 +56,30 @@ namespace MiSideCoop
             _harmony.PatchAll();
 
             Logger.LogInfo($"[MiSide Co-op] v{PluginInfo.PLUGIN_VERSION} chargé avec succès.");
-            Logger.LogInfo("[MiSide Co-op] Appuyez sur F8 pour ouvrir le menu co-op.");
+            Logger.LogInfo("[MiSide Co-op] Le menu co-op s'ouvre automatiquement. Appuyez sur F8 pour fermer/rouvrir.");
 
             // ── Bootstrap Unity ───────────────────────────────────────────────
-            var bootstrapGo = new GameObject("MiSideCoopBootstrap");
-            Object.DontDestroyOnLoad(bootstrapGo);
-            bootstrapGo.AddComponent<CoopBootstrap>();
+            // IMPORTANT : DontDestroyOnLoad est appelé depuis CoopBootstrap.Awake()
+            // (et non ici) pour garantir l'exécution dans le contexte main thread Unity.
+            EnsureBootstrap();
         }
 
+        /// <summary>
+        /// Crée ou recrée le bootstrap co-op si nécessaire.
+        /// Appelé au chargement ET automatiquement après chaque changement de scène
+        /// via le mécanisme BootstrapRecovery (ScenePatch).
+        /// </summary>
+        public static void EnsureBootstrap()
+        {
+            if (CoopBootstrap.Instance != null) return;
+
+            Logger?.LogInfo("[Co-op] Création / recréation du bootstrap...");
+            var go = new GameObject("MiSideCoopBootstrap");
+            // DontDestroyOnLoad sera appelé dans CoopBootstrap.Awake()
+            go.AddComponent<CoopBootstrap>();
+        }
+
+        // ── Enregistrement IL2CPP ─────────────────────────────────────────────
         private static void RegisterIl2CppTypes()
         {
             ClassInjector.RegisterTypeInIl2Cpp<CoopBootstrap>();
@@ -73,6 +90,7 @@ namespace MiSideCoop
             ClassInjector.RegisterTypeInIl2Cpp<RoomManager>();
             ClassInjector.RegisterTypeInIl2Cpp<Player1Avatar>();
             ClassInjector.RegisterTypeInIl2Cpp<Player2Avatar>();
+            ClassInjector.RegisterTypeInIl2Cpp<BootstrapRecovery>();
         }
     }
 }

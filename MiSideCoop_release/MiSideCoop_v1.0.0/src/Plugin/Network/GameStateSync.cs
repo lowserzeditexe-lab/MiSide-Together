@@ -21,8 +21,13 @@ namespace MiSideCoop.Network
 
         private void Awake()
         {
-            if (Instance != null) { Destroy(gameObject); return; }
+            if (Instance != null) { Destroy(this); return; }
             Instance = this;
+        }
+
+        private void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
         }
 
         private void Start()

@@ -89,13 +89,16 @@ Résolution **à runtime** via `AccessTools.TypeByName("…")` — aucune réfé
 ## 📋 Status / Roadmap
 
 ### ✅ Done
-- [x] Architecture complète + sources C# (22 fichiers)
+- [x] Architecture complète + sources C# (22 fichiers → 23 avec BootstrapRecovery)
 - [x] Serveur relay Node.js testé (register/resolve/unregister/health)
 - [x] Patches Harmony avec **vraies classes MiSide** (dump IL2CPP)
 - [x] Suppression dépendance Mirror → TCP brut intégré
-- [x] **Build .NET réussi** : `MiSideCoop.dll` 50KB, 0 warnings, 0 errors
-- [x] Package livrable `MiSideCoop_v1.0.0.zip` (64KB)
+- [x] **Build .NET réussi** : `MiSideCoop.dll` 52KB, 0 warnings, 0 errors
+- [x] Package livrable `MiSideCoop_v1.0.0.zip` mis à jour (88KB)
 - [x] README détaillé en français
+- [x] **Fix DontDestroyOnLoad IL2CPP** : déplacé dans `CoopBootstrap.Awake()` avec `SetParent(null)`
+- [x] **Auto-récupération bootstrap** : `BootstrapRecovery` + `ScenePatch Postfix`
+- [x] **Menu auto-ouvert au lancement** : `_state = MenuState.Main` (ouvert par défaut, F8 pour fermer/rouvrir)
 
 ### 🟡 P2 — Tests in-game (non disponibles dans cet environnement)
 - [ ] Test installation BepInEx 6 sur le jeu réel

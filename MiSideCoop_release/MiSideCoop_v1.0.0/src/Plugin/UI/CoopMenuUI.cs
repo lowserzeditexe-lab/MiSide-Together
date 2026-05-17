@@ -19,7 +19,7 @@ namespace MiSideCoop.UI
 
         // ── États du menu ─────────────────────────────────────────────────────
         private enum MenuState { Closed, Main, CreateRoom, JoinRoom, Connected }
-        private MenuState _state = MenuState.Closed;
+        private MenuState _state = MenuState.Main;   // ← Ouvert dès le démarrage
 
         // ── Champs de saisie ──────────────────────────────────────────────────
         private string _playerName  = "";

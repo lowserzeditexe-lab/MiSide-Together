@@ -101,3 +101,51 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: >
+  Plugin BepInEx 6 IL2CPP pour MiSide (mod co-op).
+  Le bootstrap GameObject est détruit lors du passage splash→titre car DontDestroyOnLoad
+  était appelé depuis Load() (trop tôt). L'utilisateur veut :
+  1. Ré-instancier automatiquement le bootstrap après chaque changement de scène.
+  2. Ouvrir le menu directement au lancement du jeu (sans F8).
+
+backend: []
+
+frontend:
+  - task: "Fix bootstrap DontDestroyOnLoad + auto-affichage menu"
+    implemented: true
+    working: "NA"
+    file: "MiSideCoop/Plugin/CoopBootstrap.cs"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: >
+          Corrections appliquées :
+          1. DontDestroyOnLoad déplacé dans CoopBootstrap.Awake() avec transform.SetParent(null) explicite.
+          2. Singleton Instance nettoyé dans OnDestroy() sur tous les composants (CoopNetworkManager, RoomManager, GameStateSync).
+          3. Nouveau BootstrapRecovery MonoBehaviour créé à chaque LoadScene(Single) via ScenePatch Postfix.
+             Survit à la transition, appelle EnsureBootstrap() dans Start(), puis s'auto-détruit.
+          4. Menu _state = MenuState.Main déjà présent → menu ouvert automatiquement au lancement.
+          5. Build réussi : MiSideCoop.dll 52224 octets, 0 warnings, 0 errors.
+          Note : test in-game non possible dans cet environnement.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: false
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: >
+      Fix bootstrap DontDestroyOnLoad IL2CPP + mécanisme de récupération automatique.
+      DLL recompilé et repackagé dans MiSideCoop_release/MiSideCoop_v1.0.0.zip.

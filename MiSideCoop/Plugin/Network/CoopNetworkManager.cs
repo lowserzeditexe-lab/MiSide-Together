@@ -50,7 +50,11 @@ namespace MiSideCoop.Network
             _tx.OnConnectedToHost    = OnConnectedToHost;
         }
 
-        private void OnDestroy() => StopCoop();
+        private void OnDestroy()
+        {
+            StopCoop();
+            if (Instance == this) Instance = null;
+        }
 
         // ── API publique ──────────────────────────────────────────────────────
 

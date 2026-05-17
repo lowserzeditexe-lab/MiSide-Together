@@ -60,6 +60,7 @@
     <Compile Include="Plugin\Patches\PickupPatch.cs" />
     <Compile Include="Plugin\Patches\ScenePatch.cs" />
     <Compile Include="Plugin\UI\CoopMenuUI.cs" />
+    <Compile Include="Plugin\Utils\BootstrapRecovery.cs" />
   </ItemGroup>
 
 </Project>
