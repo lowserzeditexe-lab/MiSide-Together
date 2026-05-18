@@ -1146,7 +1146,25 @@ namespace MiSideCoop.UI
             if (!show) return;
             string role = nm.IsHost ? "Host" : "Guest";
             string ping = _pingMs >= 0 ? $"{_pingMs}ms" : "N/A";
-            _hudText.text = $"[MiSide Together] {role}  |  {nm.ConnectedPlayerName}  |  {ping}  |  F8: menu";
+            // v1.3.10 — Le HUD affiche maintenant le room code + l'état du peer.
+            // Avant : "Host | ... | N/A | F8: menu"  (impossible de relire le
+            // code une fois le menu fermé → typos fréquents).
+            // Après  : "Host | room=XXXXXX | waiting for guest… | F8: menu"
+            //   puis : "Host | room=XXXXXX | guest=lowserz | 38ms | F8: menu"
+            string peerInfo;
+            if (string.IsNullOrEmpty(nm.ConnectedPlayerName) || nm.ConnectedPlayerName == "...")
+            {
+                peerInfo = nm.IsHost
+                    ? $"room={nm.RoomCode}  |  waiting for guest…"
+                    : $"room={nm.RoomCode}  |  connecting…";
+            }
+            else
+            {
+                peerInfo = nm.IsHost
+                    ? $"room={nm.RoomCode}  |  guest={nm.ConnectedPlayerName}  |  {ping}"
+                    : $"room={nm.RoomCode}  |  host={nm.ConnectedPlayerName}  |  {ping}";
+            }
+            _hudText.text = $"[MiSide Together] {role}  |  {peerInfo}  |  F8: menu";
         }
 
         // ─────────────────────────────────────────────────────────────────────

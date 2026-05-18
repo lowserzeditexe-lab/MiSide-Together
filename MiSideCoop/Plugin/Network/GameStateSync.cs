@@ -66,7 +66,17 @@ namespace MiSideCoop.Network
                 SpawnPosition = spawnPos
             });
 
-            MiSideCoopPlugin.Logger.LogInfo($"[Co-op] Scene '{sceneName}' synced with guest.");
+            // v1.3.10 — Le log précédent disait "synced with guest" même quand
+            // aucun guest n'était connecté, ce qui était trompeur en debug
+            // (logs v1.3.9 : le host affichait "Scene synced with guest" alors
+            // qu'aucun "Remote peer connected" n'avait jamais eu lieu, parce
+            // que le guest avait typo le room code et était en fait dans une
+            // autre room).
+            bool hasPeer = !string.IsNullOrEmpty(nm.ConnectedPlayerName)
+                          && nm.ConnectedPlayerName != "...";
+            MiSideCoopPlugin.Logger.LogInfo(hasPeer
+                ? $"[Co-op] Scene '{sceneName}' broadcasted to guest."
+                : $"[Co-op] Scene '{sceneName}' broadcast (no peer connected).");
         }
 
         // ── Cutscenes ─────────────────────────────────────────────────────────
