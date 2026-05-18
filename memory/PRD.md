@@ -162,6 +162,11 @@ Résolution **à runtime** via `AccessTools.TypeByName("…")` — aucune réfé
   - **Localisation complète en anglais** : tous les strings UI (titre, sous-titre, labels, boutons, status), HUD, et logs visibles côté joueur ont été traduits. Les logs internes des relais Node.js restent FR (pas visibles utilisateur final).
   - **Refonte palette Mita** : pink/magenta (#FF6FA8) comme accent au lieu du jaune, fond purple-black très sombre (#14101A), bordures violet profond (#2A1F38). Boutons avec hover violet plus contrasté.
   - **Layout amélioré** : fenêtre 680×600 (était 620×540), titre 28pt bold + sous-titre "CO-OP MULTIPLAYER MOD", barre d'accent pink fine sous le titre, footer "v1.2.0 · Press F8 to toggle this menu", code room en 64pt bold, espacements augmentés (boutons 56px → marges 28→36 latéraux, 28→40 bottom).
+- **v1.2.1** — **Fix click pass-through + rounded corners + polish UI** :
+  - **Bug critique fixé** : v1.2.0 le menu disparaissait après clic "Create a room" → cause double = (a) absence de `GraphicRaycaster` sur notre canvas → clics passaient à travers vers le menu MiSide en-dessous (qui activait une transition de scène/option) ; (b) cascade de clics dans `HandleButtonClicks` qui propageait le même `mouseDown` aux boutons des panels activés par `ShowState()` dans le `OnClick`. **Fixes** : ajout de `GraphicRaycaster` + `raycastTarget=true` sur overlay et boutons, et `return` après le premier clic traité dans la boucle.
+  - **Rounded corners IL2CPP-safe** : helper `GetRoundedSprite()` génère runtime une texture 64×64 avec coins arrondis (rayon 16px) + 1-px antialiasing, exposée comme Sprite 9-slice (border = 16,16,16,16). Appliqué à la fenêtre, sa bordure, l'input field, le HUD pill, et tous les boutons via `Image.type = Sliced`. Texture2D + Sprite.Create sont massivement utilisés par MiSide → confirmés non-strippés. Fallback try/catch silencieux vers coins droits si jamais.
+  - **HUD avec fond pill arrondi** au lieu de texte nu (lisibilité sur scènes claires), taille texte 15pt (vs 18pt).
+  - **Boutons en weight Normal** (vs Bold) à 17pt — match l'esthétique du menu MiSide natif (regular all-caps).
 
 ## 🔧 Credentials / Secrets
 N/A (mode peer-to-peer, pas d'authentification).
