@@ -4895,7 +4895,7 @@
             "privateAssets": "all"
           }
         },
-        "runtimeIdentifierGraphPath": "/opt/dotnet/sdk/6.0.428/RuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "/root/.dotnet/sdk/6.0.428/RuntimeIdentifierGraph.json"
       }
     }
   }
