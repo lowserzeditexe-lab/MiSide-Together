@@ -189,24 +189,21 @@ namespace MiSideCoop.Avatars
         // ── Tag pseudo flottant ───────────────────────────────────────────────
         private void CreateNameTag()
         {
-            // v1.3.5 — AddComponent<TextMesh>() (générique) lance
-            // "The type initializer for 'MethodInfoStoreGeneric_AddComponent_Public_T_0`1'
-            // threw an exception" en IL2CPP MiSide. Probable cause : la classe
-            // TextMesh n'est pas présente dans le build IL2CPP de MiSide
-            // (le jeu utilise TextMeshPro). Le générique ne peut pas résoudre
-            // le token IL2CPP du type T.
-            //
-            // Stratégie : on essaie l'overload non-générique AddComponent(Type)
-            // qui prend un System.Type et bypass le dispatcher générique. Si TextMesh
-            // est vraiment absent, ça throw aussi → l'appelant (Initialize) attrape
-            // et continue sans nametag (purement cosmétique).
+            // v1.3.6 — En v1.3.5 on utilisait AddComponent(typeof(TextMesh))
+            // qui prend un System.Type → overload STRIPPÉ en IL2CPP MiSide
+            // ("Method not found: AddComponent(System.Type)"). On passe par
+            // notre helper AddComponentSafe<T> qui :
+            //   1) Tente AddComponent(Il2CppSystem.Type) via réflexion
+            //      (Il2CppType.Of<T>() résolu dynamiquement).
+            //   2) Fallback sur AddComponent<T>() générique.
+            // Si TextMesh est complètement absent du build IL2CPP MiSide
+            // (le jeu utilise TextMeshPro), le helper retourne null et on
+            // annule proprement (le nametag est cosmétique).
             _nameTag = new GameObject("P2_NameTag");
             _nameTag.transform.SetParent(transform);
             _nameTag.transform.localPosition = Vector3.up * 2.4f;
 
-            // Bypass du dispatcher générique IL2CPP via AddComponent(Type).
-            var added = _nameTag.AddComponent(typeof(TextMesh));
-            var tm = added as TextMesh;
+            var tm = _nameTag.AddComponentSafe<TextMesh>();
             if (tm == null)
             {
                 // Le composant a été ajouté mais le cast échoue (proxy IL2CPP

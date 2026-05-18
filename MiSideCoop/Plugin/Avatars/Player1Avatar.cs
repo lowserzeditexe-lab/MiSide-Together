@@ -101,17 +101,18 @@ namespace MiSideCoop.Avatars
         // ── Tag flottant ──────────────────────────────────────────────────────
         private void CreateNameTag()
         {
-            // v1.3.5 — AddComponent<TextMesh>() générique lance
-            // "MethodInfoStoreGeneric_AddComponent_Public_T_0`1 type initializer threw".
-            // On utilise l'overload non-générique qui bypasse le dispatcher
-            // générique IL2CPP. Si TextMesh est complètement absent, on log
-            // et on annule proprement (le nametag est cosmétique).
+            // v1.3.6 — En v1.3.5 on utilisait AddComponent(typeof(TextMesh))
+            // qui prend un System.Type → overload STRIPPÉ en IL2CPP MiSide
+            // ("Method not found: AddComponent(System.Type)"). On passe par
+            // notre helper AddComponentSafe<T> qui tente AddComponent(Il2CppSystem.Type)
+            // via réflexion puis fallback générique. Si TextMesh est complètement
+            // absent du build IL2CPP MiSide, le helper retourne null et on
+            // annule proprement (le nametag est cosmétique).
             _nameTag = new GameObject("P1_NameTag");
             _nameTag.transform.SetParent(transform);
             _nameTag.transform.localPosition = Vector3.up * 2.6f;
 
-            var added = _nameTag.AddComponent(typeof(TextMesh));
-            var tm = added as TextMesh;
+            var tm = _nameTag.AddComponentSafe<TextMesh>();
             if (tm == null)
             {
                 MiSideCoopPlugin.Logger?.LogWarning(
