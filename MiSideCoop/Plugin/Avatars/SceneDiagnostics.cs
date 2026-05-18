@@ -48,8 +48,15 @@ namespace MiSideCoop.Avatars
         public static GameObject FindMcHeuristic()
         {
             // 1) Noms candidats — version étendue pour MiSide 0.93L.
+            //    v1.3.9 — 'Player' confirmé comme le vrai nom du MC en
+            //    0.93L (logs v1.3.8 : "Host avatar (Player1) initialized
+            //    on 'Player'."). On le met EN PREMIER pour éviter même
+            //    le coût du traversal heuristique sur la majorité des
+            //    sessions. 'male_mc' reste en seconde position au cas où
+            //    MiSide change de nom dans une version future.
             string[] names =
             {
+                "Player",
                 "male_mc", "Male_MC", "MaleMC",
                 "MC", "Mc",
                 "PlayerCharacter", "MainCharacter", "Main_Character",

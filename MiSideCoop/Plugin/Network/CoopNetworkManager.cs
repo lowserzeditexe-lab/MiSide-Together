@@ -206,6 +206,13 @@ namespace MiSideCoop.Network
         {
             MiSideCoopPlugin.Logger.LogInfo("[Co-op] Remote peer disconnected.");
             DestroyRemoteAvatars();
+            // v1.3.9 — Reset ConnectedPlayerName pour que le retry-spawn
+            // côté host arrête de recréer Player2 en boucle après une
+            // déconnexion. Sans ça, l'host gardait "lowserz" dans
+            // ConnectedPlayerName, le retry-spawn voyait _player2 == null
+            // (parce qu'on vient de Destroy l'avatar distant) et le
+            // ressuscitait toutes les 2 secondes indéfiniment.
+            ConnectedPlayerName = "...";
         }
 
         private void OnConnectedToHost()
@@ -508,6 +515,25 @@ namespace MiSideCoop.Network
             col.height    = 2f;
             col.center    = new Vector3(0, 1f, 0);
             col.isTrigger = true;
+
+            // v1.3.9 — Marquer DontDestroyOnLoad pour que l'avatar survive
+            // aux changements de scène. Sans ça, MiSide détruit notre
+            // GameObject à chaque transition (SceneLoading → Scene 1 - ...),
+            // ce qui :
+            //   1) cassait les références cachées (NRE côté guest)
+            //   2) forçait un respawn toutes les ~2s via retry-spawn
+            //      (log spam "Guest avatar (Player2) spawned on host." en
+            //       boucle, surtout après un disconnect non nettoyé)
+            //   3) faisait disparaître visuellement l'avatar pendant les
+            //      transitions de scène.
+            // L'objet doit être à la racine (sans parent) pour que Unity
+            // accepte DontDestroyOnLoad — c'est le cas par construction ici.
+            try { UnityEngine.Object.DontDestroyOnLoad(root); }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    $"[Co-op] CreateDefaultHumanoid DontDestroyOnLoad: {ex.Message}");
+            }
 
             return root;
         }

@@ -55,13 +55,29 @@ namespace MiSideCoop.Network
         // ── Boucle Update ─────────────────────────────────────────────────────
         protected virtual void Update()
         {
-            if (IsLocalPlayer) return;
+            // v1.3.9 — Try/catch défensif autour de Update. Au changement
+            // de scène, certaines références (transform, _animator) peuvent
+            // devenir des Unity-destroyed objects, ce qui levait des
+            // NullReferenceException silencieuses côté guest et faisait
+            // tomber la pump TCP (= disconnect immédiat dès que host change
+            // de scène). Avec DontDestroyOnLoad sur le GameObject + ce
+            // catch, on tolère une frame transitoire sans crasher la
+            // session co-op.
+            try
+            {
+                if (IsLocalPlayer) return;
 
-            // Interpolation fluide vers la position/rotation cible
-            transform.position = Vector3.Lerp(
-                transform.position, _targetPosition, LerpFactor * Time.deltaTime);
-            transform.rotation = Quaternion.Slerp(
-                transform.rotation, _targetRotation, LerpFactor * Time.deltaTime);
+                // Interpolation fluide vers la position/rotation cible
+                transform.position = Vector3.Lerp(
+                    transform.position, _targetPosition, LerpFactor * Time.deltaTime);
+                transform.rotation = Quaternion.Slerp(
+                    transform.rotation, _targetRotation, LerpFactor * Time.deltaTime);
+            }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    $"[Co-op] PlayerAvatar.Update transient error: {ex.Message}");
+            }
         }
     }
 }
