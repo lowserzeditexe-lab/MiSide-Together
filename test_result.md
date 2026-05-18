@@ -134,8 +134,23 @@ frontend:
 
   - task: "Fix MissingMethodException SetPixels32(Color32[]) — UI build crash v1.2.1"
     implemented: true
-    working: "NA"
+    working: true
     file: "MiSideCoop/Plugin/UI/CoopMenuUI.cs"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "user"
+        comment: >
+          v1.2.2 testée en jeu : "Rounded sprite gen failed... Falling back to
+          square corners" loggé une fois, UI construite, menu fonctionnel.
+          Plus de crash. ✅
+
+  - task: "v1.2.3 — Rounded corners via SetPixel, Google Sans font, Mita bug fix"
+    implemented: true
+    working: "NA"
+    file: "MiSideCoop/Plugin/UI/CoopMenuUI.cs, MiSideCoop/Plugin/Network/CoopNetworkManager.cs"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
@@ -143,35 +158,45 @@ frontend:
       - working: "NA"
         agent: "main"
         comment: >
-          Bug report v1.2.1 : "[Co-op] UI build failed: System.MissingMethodException:
-          Method not found: 'Void UnityEngine.Texture2D.SetPixels32(UnityEngine.Color32[])'."
+          3 améliorations v1.2.3 :
 
-          Root cause :
-          • Mismatch de signature entre le compile-time reference (UnityEngine.Modules
-            NuGet 2021.3.18 → SetPixels32(Color32[])) et le runtime IL2CPP-unhollowed
-            (Il2CppInterop → SetPixels32(Il2CppStructArray<Color32>)).
-          • Le JIT lève MissingMethodException AVANT que le corps de GetRoundedSprite
-            s'exécute → le try/catch INTERNE ne peut pas attraper (sa "protected region"
-            IL n'est jamais établie). L'exception remonte au frame appelant ApplyRounded
-            (sans try/catch) puis à BuildCanvas, puis à Start où elle est attrapée trop
-            tard → BuildCanvas a déjà avorté, UI cassée.
+          1) COINS ARRONDIS — Réimplémentation TryApplyPixels32 :
+             SetPixel(int x, int y, Color c) un par un (4096 itérations 64×64).
+             Aucun marshalling d'array → contourne le problème IL2CPP de
+             SetPixels32(Color32[]) absent. Coût négligeable (1× au boot).
 
-          Fix appliqué (v1.2.2) :
-          1. SetPixels32 isolé dans helper TryApplyPixels32(tex, pixels) : si son JIT
-             échoue, l'exception remonte dans GetRoundedSprite où le try/catch englobant
-             dans un AUTRE frame catch correctement.
-          2. ApplyRounded reçoit son propre try/catch + flag sticky _roundedSpriteFailed :
-             filet de sécurité ultime → si la décoration arrondie échoue, l'UI continue
-             de se construire avec coins droits au lieu d'avorter.
-          3. _roundedSpriteFailed court-circuite les tentatives suivantes (logs ONCE).
-          4. Version bumpée 1.2.1 → 1.2.2. Build : 63488 octets, 0 warn, 0 err.
-          5. Package : MiSideCoop_release/MiSideCoop_v1.2.2.zip (108 KB).
+          2) GOOGLE SANS (et fonts modernes) — Nouvelle priorité TryFindFontInScene :
+             a. Tente Font.CreateDynamicFontFromOSFont sur ["Google Sans",
+                "Product Sans", "Roboto", "Segoe UI Variable", "Segoe UI",
+                "Calibri"] avec heuristique de matching de nom (rejette les
+                fallbacks Unity silencieux).
+             b. Flag sticky _osFontApiBroken si l'API est strippée → cascade
+                directe vers Arial built-in sans spam de logs.
+             c. Fallback Arial.ttf / LegacyRuntime.ttf / scan scène (existant).
+             Note utilisateur : pour bénéficier de Google Sans, l'installer sur
+             Windows depuis https://fonts.google.com/specimen/Google+Sans.
 
-          Comportement attendu après fix :
-          • Soit SetPixels32 fonctionne → coins arrondis OK.
-          • Soit SetPixels32 indisponible → warning loggé une fois, coins droits,
-            menu fonctionnel.
-          Test in-game non possible dans cet environnement.
+          3) BUG MITA "Create Room" — FindMCGameObject réécrit :
+             Root cause : l'ancienne liste de noms contenait "Person" et
+             "Player" qui matchaient la GameObject de Mita dans le menu
+             principal. SpawnPlayer1Local lui collait alors un Player1Avatar +
+             activait EnsureCameraActive → caméra enfant de Mita activée,
+             vue altérée + Update() interférant avec son transform.
+             Fix :
+             a. FindMCGameObject utilise d'abord AccessTools.TypeByName("PlayerMove")
+                + FindObjectOfType — composant unique du vrai MC MiSide.
+             b. Liste de noms restreinte : "male_mc", "MC", "PlayerCharacter",
+                "MainCharacter", "PlayerController". "Person" et "Player"
+                retirés. Tag fallback retiré.
+             c. SpawnPlayer1Local/Remote : si null → defer (pas de
+                CreateDefaultHumanoid en menu). Retry toutes les 2s dans
+                Update() jusqu'à ce que PlayerMove apparaisse (= en jeu).
+
+          Build : MiSideCoop.dll 0 warn / 0 err. Package : v1.2.3.zip (112 KB).
+          Test in-game à valider par l'utilisateur :
+            • Menu co-op avec coins arrondis pourpres (visible immédiatement)
+            • Police Google Sans si installée, sinon Segoe UI/Roboto, sinon Arial
+            • "Create Room" depuis menu → Mita ne bouge plus (avatar deferred)
 
 metadata:
   created_by: "main_agent"
