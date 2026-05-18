@@ -132,6 +132,47 @@ frontend:
           5. Build réussi : MiSideCoop.dll 52224 octets, 0 warnings, 0 errors.
           Note : test in-game non possible dans cet environnement.
 
+  - task: "Fix MissingMethodException SetPixels32(Color32[]) — UI build crash v1.2.1"
+    implemented: true
+    working: "NA"
+    file: "MiSideCoop/Plugin/UI/CoopMenuUI.cs"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: >
+          Bug report v1.2.1 : "[Co-op] UI build failed: System.MissingMethodException:
+          Method not found: 'Void UnityEngine.Texture2D.SetPixels32(UnityEngine.Color32[])'."
+
+          Root cause :
+          • Mismatch de signature entre le compile-time reference (UnityEngine.Modules
+            NuGet 2021.3.18 → SetPixels32(Color32[])) et le runtime IL2CPP-unhollowed
+            (Il2CppInterop → SetPixels32(Il2CppStructArray<Color32>)).
+          • Le JIT lève MissingMethodException AVANT que le corps de GetRoundedSprite
+            s'exécute → le try/catch INTERNE ne peut pas attraper (sa "protected region"
+            IL n'est jamais établie). L'exception remonte au frame appelant ApplyRounded
+            (sans try/catch) puis à BuildCanvas, puis à Start où elle est attrapée trop
+            tard → BuildCanvas a déjà avorté, UI cassée.
+
+          Fix appliqué (v1.2.2) :
+          1. SetPixels32 isolé dans helper TryApplyPixels32(tex, pixels) : si son JIT
+             échoue, l'exception remonte dans GetRoundedSprite où le try/catch englobant
+             dans un AUTRE frame catch correctement.
+          2. ApplyRounded reçoit son propre try/catch + flag sticky _roundedSpriteFailed :
+             filet de sécurité ultime → si la décoration arrondie échoue, l'UI continue
+             de se construire avec coins droits au lieu d'avorter.
+          3. _roundedSpriteFailed court-circuite les tentatives suivantes (logs ONCE).
+          4. Version bumpée 1.2.1 → 1.2.2. Build : 63488 octets, 0 warn, 0 err.
+          5. Package : MiSideCoop_release/MiSideCoop_v1.2.2.zip (108 KB).
+
+          Comportement attendu après fix :
+          • Soit SetPixels32 fonctionne → coins arrondis OK.
+          • Soit SetPixels32 indisponible → warning loggé une fois, coins droits,
+            menu fonctionnel.
+          Test in-game non possible dans cet environnement.
+
 metadata:
   created_by: "main_agent"
   version: "1.0"

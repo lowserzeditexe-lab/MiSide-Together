@@ -11,4 +11,3 @@
 /app/MiSideCoop/obj/Release/refint/MiSideCoop.dll
 /app/MiSideCoop/obj/Release/MiSideCoop.pdb
 /app/MiSideCoop/obj/Release/ref/MiSideCoop.dll
-/app/MiSideCoop/obj/Release/MiSideCoop.sourcelink.json

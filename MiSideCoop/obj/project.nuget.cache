@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "rrlFaXmRlW8=",
+  "dgSpecHash": "h3KQNiVnTfiqK031YaS4qQ01YWDKXE/OQ85ojIiJnfSlexrHpC48o3wscz7XJAXGh3HG6951ZQ39uFli4igh7A==",
   "success": true,
   "projectFilePath": "/app/MiSideCoop/MiSideCoop.csproj",
   "expectedPackageFiles": [
@@ -90,9 +90,7 @@
     "/root/.nuget/packages/system.text.encoding/4.3.0/system.text.encoding.4.3.0.nupkg.sha512",
     "/root/.nuget/packages/system.threading/4.3.0/system.threading.4.3.0.nupkg.sha512",
     "/root/.nuget/packages/system.threading.tasks/4.3.0/system.threading.tasks.4.3.0.nupkg.sha512",
-    "/root/.nuget/packages/unityengine.modules/2021.3.18/unityengine.modules.2021.3.18.nupkg.sha512",
-    "/root/.nuget/packages/microsoft.netcore.app.ref/6.0.36/microsoft.netcore.app.ref.6.0.36.nupkg.sha512",
-    "/root/.nuget/packages/microsoft.aspnetcore.app.ref/6.0.36/microsoft.aspnetcore.app.ref.6.0.36.nupkg.sha512"
+    "/root/.nuget/packages/unityengine.modules/2021.3.18/unityengine.modules.2021.3.18.nupkg.sha512"
   ],
   "logs": []
 }
