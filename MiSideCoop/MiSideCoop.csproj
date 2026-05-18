@@ -61,6 +61,7 @@
     <Compile Include="Plugin\Network\GameStateSync.cs" />
     <Compile Include="Plugin\Avatars\Il2CppComponentExtensions.cs" />
     <Compile Include="Plugin\Avatars\Il2CppAddComponentHelper.cs" />
+    <Compile Include="Plugin\Avatars\SceneDiagnostics.cs" />
     <Compile Include="Plugin\Avatars\Player1Avatar.cs" />
     <Compile Include="Plugin\Avatars\Player2Avatar.cs" />
     <Compile Include="Plugin\Relay\RoomManager.cs" />

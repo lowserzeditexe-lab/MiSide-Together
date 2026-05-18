@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using MiSideCoop.Avatars;
 using MiSideCoop.Network;
 using MiSideCoop.UI;
 using MiSideCoop.Relay;
@@ -81,6 +82,21 @@ namespace MiSideCoop
         {
             if (Input.GetKeyDown(KeyCode.F8))
                 _menuUI?.ToggleMenu();
+
+            // v1.3.7 — F9 dump scene diagnostic.
+            // Imprime dans le log la liste des Animators / Cameras / Rigidbodies /
+            // CharacterControllers + le candidat MC retenu par l'heuristique.
+            // Sert à identifier le vrai nom du MC en MiSide 0.93L (et au-delà)
+            // sans dépendre d'un dump Cpp2IL externe.
+            if (Input.GetKeyDown(KeyCode.F9))
+            {
+                try { SceneDiagnostics.DumpScene(); }
+                catch (Exception ex)
+                {
+                    MiSideCoopPlugin.Logger?.LogError(
+                        $"[Co-op] F9 dump failed: {ex.Message}");
+                }
+            }
         }
     }
 }

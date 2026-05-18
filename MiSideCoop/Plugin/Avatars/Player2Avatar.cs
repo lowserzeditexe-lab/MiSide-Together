@@ -132,36 +132,15 @@ namespace MiSideCoop.Avatars
         }
 
         /// <summary>
-        /// Désactive toutes les caméras de la scène active (remplace
-        /// <c>Camera.allCameras</c> strippé). Parcourt les root GameObjects et
-        /// fait un traversal récursif IL2CPP-safe sur chacun.
+        /// Désactive toutes les caméras visibles de la scène active (remplace
+        /// <c>Camera.allCameras</c> ET <c>Scene.GetRootGameObjects()</c>, tous
+        /// deux strippés en IL2CPP MiSide 0.93L). Délégué à
+        /// <see cref="SceneDiagnostics.DisableExistingCamerasSafe"/> qui n'utilise
+        /// que <c>Camera.main</c> + traversal manuel via Transform.childCount.
         /// </summary>
         private static void DisableExistingCameras()
         {
-            try
-            {
-                var scene = SceneManager.GetActiveScene();
-                var roots = scene.GetRootGameObjects();
-                if (roots == null) return;
-                foreach (var root in roots)
-                {
-                    if (root == null) continue;
-                    var rootTr = root.transform;
-                    if (rootTr == null) continue;
-                    // Helper IL2CPP-safe de v1.3.4 : traversal récursif via
-                    // Transform.childCount + GetComponent<T>() singulier.
-                    var cams = rootTr.GetComponentsInChildrenSafe<Camera>(true);
-                    foreach (var c in cams)
-                    {
-                        if (c != null) c.enabled = false;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                MiSideCoopPlugin.Logger?.LogWarning(
-                    $"[Co-op] DisableExistingCameras: {ex.Message}");
-            }
+            SceneDiagnostics.DisableExistingCamerasSafe();
         }
 
         // ── Collider Trigger (ne bloque jamais la physique locale) ────────────
@@ -189,38 +168,19 @@ namespace MiSideCoop.Avatars
         // ── Tag pseudo flottant ───────────────────────────────────────────────
         private void CreateNameTag()
         {
-            // v1.3.6 — En v1.3.5 on utilisait AddComponent(typeof(TextMesh))
-            // qui prend un System.Type → overload STRIPPÉ en IL2CPP MiSide
-            // ("Method not found: AddComponent(System.Type)"). On passe par
-            // notre helper AddComponentSafe<T> qui :
-            //   1) Tente AddComponent(Il2CppSystem.Type) via réflexion
-            //      (Il2CppType.Of<T>() résolu dynamiquement).
-            //   2) Fallback sur AddComponent<T>() générique.
-            // Si TextMesh est complètement absent du build IL2CPP MiSide
-            // (le jeu utilise TextMeshPro), le helper retourne null et on
-            // annule proprement (le nametag est cosmétique).
-            _nameTag = new GameObject("P2_NameTag");
-            _nameTag.transform.SetParent(transform);
-            _nameTag.transform.localPosition = Vector3.up * 2.4f;
-
-            var tm = _nameTag.AddComponentSafe<TextMesh>();
-            if (tm == null)
-            {
-                // Le composant a été ajouté mais le cast échoue (proxy IL2CPP
-                // wrapping). On annule la création du tag pour éviter un GO
-                // orphelin et on retourne — le pipeline continue sans nametag.
-                MiSideCoopPlugin.Logger?.LogWarning(
-                    "[Co-op] TextMesh AddComponent returned non-TextMesh proxy; nametag skipped.");
-                UnityEngine.Object.Destroy(_nameTag);
-                _nameTag = null;
-                return;
-            }
-            tm.text           = PlayerName;
-            tm.color          = new Color(0.3f, 0.8f, 1f); // cyan clair
-            tm.fontSize       = 22;
-            tm.alignment      = TextAlignment.Center;
-            tm.anchor         = TextAnchor.MiddleCenter;
-            tm.characterSize  = 0.08f;
+            // v1.3.7 — TextMesh est CONFIRMÉ absent du build IL2CPP MiSide 0.93L
+            // (logs v1.3.6 sur Player1 ET Player2 : reflection path + generic
+            // fallback échouent tous deux, "type initializer for
+            // MethodInfoStoreGeneric_AddComponent_Public_T_0`1 threw").
+            // → MiSide utilise TextMeshPro (TMP). TextMesh n'existe simplement
+            //   pas dans son assembly IL2CPP. Tenter AddComponent<TextMesh>
+            //   inonde le log à chaque spawn sans résultat.
+            //
+            // → On désactive la création du nametag jusqu'à ce qu'on câble
+            //   le mod sur TMPro.TextMeshPro (nécessite la référence assembly
+            //   TMP_Essentials, à ajouter au csproj plus tard). Le nametag est
+            //   purement cosmétique donc son absence ne bloque rien.
+            _nameTag = null;
         }
 
         protected override void Update()

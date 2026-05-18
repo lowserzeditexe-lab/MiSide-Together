@@ -101,32 +101,17 @@ namespace MiSideCoop.Avatars
         // ── Tag flottant ──────────────────────────────────────────────────────
         private void CreateNameTag()
         {
-            // v1.3.6 — En v1.3.5 on utilisait AddComponent(typeof(TextMesh))
-            // qui prend un System.Type → overload STRIPPÉ en IL2CPP MiSide
-            // ("Method not found: AddComponent(System.Type)"). On passe par
-            // notre helper AddComponentSafe<T> qui tente AddComponent(Il2CppSystem.Type)
-            // via réflexion puis fallback générique. Si TextMesh est complètement
-            // absent du build IL2CPP MiSide, le helper retourne null et on
-            // annule proprement (le nametag est cosmétique).
-            _nameTag = new GameObject("P1_NameTag");
-            _nameTag.transform.SetParent(transform);
-            _nameTag.transform.localPosition = Vector3.up * 2.6f;
-
-            var tm = _nameTag.AddComponentSafe<TextMesh>();
-            if (tm == null)
-            {
-                MiSideCoopPlugin.Logger?.LogWarning(
-                    "[Co-op] TextMesh AddComponent returned non-TextMesh proxy; P1 nametag skipped.");
-                UnityEngine.Object.Destroy(_nameTag);
-                _nameTag = null;
-                return;
-            }
-            tm.text           = PlayerName;
-            tm.color          = Color.white;
-            tm.fontSize       = 22;
-            tm.alignment      = TextAlignment.Center;
-            tm.anchor         = TextAnchor.MiddleCenter;
-            tm.characterSize  = 0.08f;
+            // v1.3.7 — TextMesh est CONFIRMÉ absent du build IL2CPP MiSide 0.93L
+            // (logs v1.3.6 : reflection ET fallback générique échouent tous deux,
+            // car la classe TextMesh n'existe pas dans l'assembly du jeu — MiSide
+            // utilise TextMeshPro). Tenter AddComponent<TextMesh> ne fait que
+            // spammer le log à chaque spawn d'avatar sans résultat.
+            //
+            // → On désactive l'attempt jusqu'à ce que le mod soit câblé sur
+            //   TMPro.TextMeshPro (nécessite la référence à l'assembly TMP,
+            //   à ajouter dans le csproj). Le nametag est purement cosmétique
+            //   donc son absence ne bloque rien fonctionnellement.
+            _nameTag = null;
         }
 
         // ── Caméra locale ─────────────────────────────────────────────────────

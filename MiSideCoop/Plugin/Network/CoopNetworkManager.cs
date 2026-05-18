@@ -422,50 +422,17 @@ namespace MiSideCoop.Network
         //
         private static GameObject FindMCGameObject()
         {
-            // ── v1.2.4 FIX MITA (révisé) ──
-            // L'approche AccessTools.TypeByName("PlayerMove") + FindObjectOfType(Type)
-            // de v1.2.3 a échoué : FindObjectOfType(Type) est STRIPPÉ en IL2CPP MiSide
-            // (confirmé par log "Method not found: 'UnityEngine.Object FindObjectOfType
-            // (System.Type)'"). On revient à des APIs IL2CPP-safe uniquement.
+            // v1.3.7 — Délégation à SceneDiagnostics.FindMcHeuristic qui :
+            //   1) Essaie une liste élargie de noms candidats (incluant les
+            //      variantes 0.93L : Mita_MC, Player_MC, MC_Player, Character...).
+            //   2) Heuristique sous Camera.main.transform.root : descendant
+            //      avec Rigidbody/CharacterController + Animator, nom non-Mita.
+            //   3) Fallback : Camera.main.transform.root (comportement v1.3.6).
             //
-            // Stratégie en 3 niveaux, du plus fiable au plus heuristique :
-
-            // ── 1. Nom exact "male_mc" ──
-            // Confirmé par dump IL2CPP de MiSide comme le nom officiel du MC.
-            // 100 % spécifique → impossible de matcher Mita ou autre PNJ.
-            var go = SafeGameObjectFind("male_mc");
-            if (go != null) return go;
-
-            // ── 2. Autres noms restreints ──
-            // "Person" et "Player" volontairement RETIRÉS (matchaient Mita en v1.2.2−).
-            // Tag fallback retiré aussi (trop générique).
-            string[] names = { "MC", "PlayerCharacter", "MainCharacter", "PlayerController" };
-            foreach (var n in names)
-            {
-                go = SafeGameObjectFind(n);
-                if (go != null) return go;
-            }
-
-            // ── 3. Heuristique Camera.main.transform.root ──
-            // En jeu MiSide, le MC porte sa caméra en enfant → root = MC.
-            // Au menu principal, la caméra est sur "MenuCamera" / "Canvas" / etc.,
-            // qu'on rejette via IsMenuRootName pour éviter de re-tomber sur Mita.
-            try
-            {
-                var cam = Camera.main;
-                if (cam != null)
-                {
-                    var root = cam.transform.root.gameObject;
-                    if (root != null && !IsMenuRootName(root.name))
-                        return root;
-                }
-            }
-            catch (Exception ex)
-            {
-                MiSideCoopPlugin.Logger?.LogWarning($"[Co-op] Camera.main.root lookup: {ex.Message}");
-            }
-
-            return null;
+            // L'utilisateur peut appuyer sur F9 en jeu pour dumper l'arbre complet
+            // de la scène (cf. CoopBootstrap) → on identifie le vrai nom MC en
+            // 0.93L et on l'ajoute à la liste de candidats sans Cpp2IL.
+            return MiSideCoop.Avatars.SceneDiagnostics.FindMcHeuristic();
         }
 
         /// <summary>

@@ -648,7 +648,7 @@ namespace MiSideCoop.UI
             footRt.pivot = new Vector2(0.5f, 0f);
             footRt.anchoredPosition = new Vector2(0f, 10f);
             footRt.sizeDelta = new Vector2(-20f, 18f);
-            AddText(footerObj, $"v{PluginInfo.PLUGIN_VERSION}  •  Press F8 to toggle this menu",
+            AddText(footerObj, $"v{PluginInfo.PLUGIN_VERSION}  •  F8: menu  •  F9: scene dump",
                     11, TXT_DIM, TextAnchor.MiddleCenter);
 
             _panelMain      = BuildPanelMain(window);
