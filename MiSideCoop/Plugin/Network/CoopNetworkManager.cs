@@ -360,12 +360,47 @@ namespace MiSideCoop.Network
             }
         }
 
+        private bool _player2LocalDeferredLogged;
         private void SpawnPlayer2Local()
         {
+            // v1.4.1 — PIVOT ARCHITECTURAL :
+            //
+            // Avant : on créait un GameObject synthétique 'Player2_Self'
+            // (capsule + sphère) qu'on prétendait être le "corps du guest"
+            // avec sa propre caméra MainCamera. Conflit avec la MainCamera du
+            // VRAI MC MiSide qui tournait en parallèle sur la machine du
+            // guest → NRE et écran gris-bleu uni.
+            //
+            // Maintenant : sur la machine du guest, MiSide tourne normalement
+            // avec son MC 'Player' local. On attache Player2Avatar
+            // (isLocal=true) DIRECTEMENT sur ce MC réel. PlayerAvatar.transform
+            // pointe alors sur le transform du MC, donc SendLocalState envoie
+            // automatiquement les coordonnées réelles du joueur au host.
+            //
+            // Côté host, l'avatar visuel du guest reste un humanoïde synthétique
+            // (Player2_Guest, créé par SpawnPlayer2Remote) qui interpolera vers
+            // les positions reçues. Symétrique à ce que SpawnPlayer1Local /
+            // SpawnPlayer1Remote font pour le host.
             try
             {
-                var go = CreateDefaultHumanoid("Player2_Self");
-                _player2 = go.AddComponentSafe<Player2Avatar>();
+                if (_player2 != null) return; // déjà attaché
+
+                var mcGo = FindMCGameObject();
+                if (mcGo == null)
+                {
+                    if (!_player2LocalDeferredLogged)
+                    {
+                        _player2LocalDeferredLogged = true;
+                        MiSideCoopPlugin.Logger.LogInfo(
+                            "[Co-op] Guest local avatar spawn deferred — no MC GameObject yet "
+                          + "(probably still in main menu). Will retry silently on each scene.");
+                    }
+                    return;
+                }
+                _player2LocalDeferredLogged = false;
+
+                _player2 = mcGo.GetComponent<Player2Avatar>()
+                        ?? mcGo.AddComponentSafe<Player2Avatar>();
                 if (_player2 == null)
                 {
                     MiSideCoopPlugin.Logger.LogError(
@@ -373,8 +408,8 @@ namespace MiSideCoop.Network
                     return;
                 }
                 _player2.Initialize(MiSideCoopPlugin.LocalPlayerName.Value, true);
-                _player2.ApplySkinColor(MiSideCoopPlugin.Player2SkinColor.Value);
-                MiSideCoopPlugin.Logger.LogInfo("[Co-op] Local avatar (Player2) initialized on client.");
+                MiSideCoopPlugin.Logger.LogInfo(
+                    $"[Co-op] Guest local avatar (Player2) attached on real MC '{mcGo.name}'.");
             }
             catch (Exception ex)
             {

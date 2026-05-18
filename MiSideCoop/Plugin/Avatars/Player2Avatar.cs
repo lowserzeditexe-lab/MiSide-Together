@@ -23,16 +23,36 @@ namespace MiSideCoop.Avatars
 
         public override void Initialize(string playerName, bool isLocal)
         {
-            // ── v1.3.5 STEP-BY-STEP TRY/CATCH ──
-            // En v1.3.3 on englobait toute l'init dans un seul try/catch. Mais
-            // si une étape PRÉCOCE (SetupOwnCamera, à cause de Camera.allCameras
-            // strippé) levait, les étapes suivantes (CreateNameTag, ApplySkinColor)
-            // étaient skippées. Résultat côté guest : pas de caméra dédiée et pas
-            // de couleur, donc rien à voir.
+            // v1.4.1 — PIVOT ARCHITECTURAL :
             //
-            // v1.3.5 : chaque étape a son propre try/catch — un fail isolé ne
-            // bloque plus les étapes suivantes. base.Initialize reste critique
-            // (établit PlayerName/IsLocalPlayer), donc il porte aussi son try/catch.
+            // Avant v1.4.1 : sur le guest, on créait un GameObject synthétique
+            // 'Player2_Self' (capsule + sphère) auquel on attachait Player2Avatar
+            // avec isLocal=true. On y installait notre propre caméra taguée
+            // MainCamera, un trigger collider, etc. → Conflit avec le MC MiSide
+            // local du guest (qui a aussi sa propre MainCamera) → NRE en cascade
+            // au load de Scene 1 - RealRoom, screen gris-bleu uni.
+            //
+            // Depuis v1.4.1 : chaque joueur joue MiSide normalement sur sa
+            // machine avec son propre MC 'Player' local. Player2Avatar est
+            // attaché DIRECTEMENT SUR LE MC RÉEL (comme Player1Avatar côté
+            // host). Le mode "remote" (isLocal=false) reste sur un humanoïde
+            // synthétique pour visualiser le peer côté host.
+            //
+            // → Côté guest, isLocal=true signifie : "Player2Avatar est attaché
+            //   sur le vrai MC du guest, qui sert juste à streamer position +
+            //   rotation + état Animator au host". On NE TOUCHE PAS au MC :
+            //   pas de SetupOwnCamera (MainCamera conflict), pas de trigger
+            //   collider (remplacerait le CharacterController du MC), pas
+            //   d'ApplySkinColor (recolorisrait les textures du MC), pas de
+            //   MakeKinematic (figerait le MC). Le streaming de la position
+            //   se fait via PlayerAvatar.transform qui pointe directement sur
+            //   le transform du MC, donc tout est gratuit.
+            //
+            // → Côté host, isLocal=false signifie : "Player2Avatar est attaché
+            //   sur l'humanoïde synthétique Player2_Guest qui représente
+            //   visuellement le guest". On garde toute la mise en scène
+            //   (kinematic, nametag, skin color) — c'est notre propre objet.
+
             try { base.Initialize(playerName, isLocal); }
             catch (Exception ex)
             {
@@ -40,6 +60,17 @@ namespace MiSideCoop.Avatars
                     $"[Co-op] Player2Avatar.base.Initialize failed: {ex.Message}");
             }
 
+            if (isLocal)
+            {
+                // Attaché sur le VRAI MC MiSide local → aucune modification
+                // destructive. Le rôle de cet avatar est purement de streamer
+                // la position via PlayerAvatar.transform (= transform du MC).
+                MiSideCoopPlugin.Logger?.LogInfo(
+                    $"[Co-op] Player2Avatar '{playerName}' attached on local MC (read-only stream).");
+                return;
+            }
+
+            // ── isLocal=false : humanoïde synthétique côté host (ghost du guest) ──
             try { _renderers = this.GetComponentsInChildrenSafe<Renderer>(); }
             catch (Exception ex)
             {
@@ -48,35 +79,16 @@ namespace MiSideCoop.Avatars
                 _renderers = Array.Empty<Renderer>();
             }
 
-            if (isLocal)
+            try { MakeKinematic(); }
+            catch (Exception ex)
             {
-                try { SetupOwnCamera(); }
-                catch (Exception ex)
-                {
-                    MiSideCoopPlugin.Logger?.LogError(
-                        $"[Co-op] Player2Avatar.SetupOwnCamera failed: {ex.Message}");
-                }
-                try { SetupTriggerCollider(); }
-                catch (Exception ex)
-                {
-                    MiSideCoopPlugin.Logger?.LogWarning(
-                        $"[Co-op] Player2Avatar.SetupTriggerCollider failed: {ex.Message}");
-                }
-            }
-            else
-            {
-                try { MakeKinematic(); }
-                catch (Exception ex)
-                {
-                    MiSideCoopPlugin.Logger?.LogWarning(
-                        $"[Co-op] Player2Avatar.MakeKinematic failed: {ex.Message}");
-                }
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    $"[Co-op] Player2Avatar.MakeKinematic failed: {ex.Message}");
             }
 
             try { CreateNameTag(); }
             catch (Exception ex)
             {
-                // Cosmétique — non bloquant. Log silencieux pour ne pas spammer.
                 MiSideCoopPlugin.Logger?.LogWarning(
                     $"[Co-op] Player2Avatar.CreateNameTag skipped (IL2CPP stripped): {ex.Message}");
             }
@@ -89,7 +101,7 @@ namespace MiSideCoop.Avatars
             }
 
             MiSideCoopPlugin.Logger?.LogInfo(
-                $"[Co-op] Player2Avatar '{playerName}' ready (local={isLocal}).");
+                $"[Co-op] Player2Avatar '{playerName}' ready (remote ghost on host).");
         }
 
         // ── Couleur du skin ───────────────────────────────────────────────────
