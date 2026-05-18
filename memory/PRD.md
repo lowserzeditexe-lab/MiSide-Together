@@ -180,5 +180,15 @@ Résolution **à runtime** via `AccessTools.TypeByName("…")` — aucune réfé
   - **UI menu améliorée** : le status text du panel Create se rafraîchit en temps réel ("Guest connected: <name>" → "Launching game on both sides…"). Le bouton DÉMARRER passe automatiquement de disabled → enabled dès que le guest s'identifie via `RoomJoinMessage`.
   - **Build** : 0 warnings, 0 errors. Release `/app/MiSideCoop_release/MiSideCoop_v1.4.3.zip` (128 KB, DLL 104 KB).
 
+- **v1.4.4** — **Fix bouton DÉMARRER : appel direct de `Menu.ButtonNewGame()` via réflexion** :
+  - **Root cause v1.4.3** : `MenuButtonClicker.ClickNewGame()` ne trouvait pas le bouton "NOUVELLE PARTIE" car (a) MiSide utilise **TextMeshPro** (TMP) et non `UnityEngine.UI.Text` legacy → `ReadText()` retournait null sur tous les boutons scannés ; (b) le Canvas du menu n'est pas forcément sous `Camera.main.transform.root`.
+  - **Fix v1.4.4** : exploitation du dump Il2CppDumper qui révèle une classe MiSide `Menu` (TypeDefIndex 1583, `dump.cs:103851`) avec une méthode publique **`void ButtonNewGame()`** (`dump.cs:103971`) — exactement celle qu'invoque le bouton du menu via UnityEvent. Le nouveau `MenuButtonClicker` :
+    1. Résout `_menuType = AccessTools.TypeByName("Menu")` (Harmony) et la méthode `ButtonNewGame` via System.Reflection.
+    2. Résout `Il2CppType.Of<T>()` + `GameObject.GetComponent(Il2CppSystem.Type)` via réflexion (pattern identique à `Il2CppAddComponentHelper` v1.3.6).
+    3. Walk multi-anchors (Camera.main.transform.root, EventSystem.current root, GameObject.Find sur 11 noms candidats Canvas/Menu) à la recherche d'un GameObject avec composant `Menu`.
+    4. Invoke `Menu.ButtonNewGame()` directement → bypass complet du système UI Button/TMP.
+  - **Path fallback** : si `Menu` introuvable (autre version MiSide), retombe sur l'ancien scan `Button` + text matching (élargi avec `gameObject.name` comme dernière chance).
+  - **Build** : 0 warnings, 0 errors. Release `/app/MiSideCoop_release/MiSideCoop_v1.4.4.zip` (132 KB, DLL 110 KB).
+
 ## 🔧 Credentials / Secrets
 N/A (mode peer-to-peer, pas d'authentification).
