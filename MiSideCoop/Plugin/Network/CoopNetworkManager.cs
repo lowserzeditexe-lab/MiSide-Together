@@ -113,18 +113,32 @@ namespace MiSideCoop.Network
 
             if (!IsConnected) return;
 
-            // 0) Retry-spawn différé : si l'avatar local n'a pas pu être créé
-            //    (pas de PlayerMove au moment de StartHost/StartClient, ex:
-            //    on était encore au menu principal), on re-tente toutes les 2s.
-            //    Dès que le joueur entre en jeu, PlayerMove apparaît → spawn OK.
+            // 0) Retry-spawn différé : si l'avatar local ou distant n'a pas pu
+            //    être créé (pas de PlayerMove côté host, ou GameObject détruit
+            //    sur changement de scène), on re-tente toutes les 2s. Dès que
+            //    le joueur entre en jeu, le MC apparaît → spawn OK.
+            //
+            // v1.3.8 — on retry aussi pour Player2 côté guest (les avatars
+            // synthétiques ne sont pas DontDestroyOnLoad → détruits au scene
+            // change, doivent être re-spawnés).
             _retrySpawnTimer += Time.deltaTime;
             if (_retrySpawnTimer >= 2f)
             {
                 _retrySpawnTimer = 0f;
-                if (_isHost && _player1 == null)
-                    SpawnPlayer1Local();
-                else if (_isClient && _player1 == null)
-                    SpawnPlayer1Remote();
+                if (_isHost)
+                {
+                    if (_player1 == null) SpawnPlayer1Local();
+                    // Player2 (guest ghost) est respawné via OnRemotePeerConnected,
+                    // ou via retry ici si l'avatar a été détruit par un scene change.
+                    if (_player2 == null && !string.IsNullOrEmpty(ConnectedPlayerName)
+                        && ConnectedPlayerName != "...")
+                        SpawnPlayer2Remote();
+                }
+                else if (_isClient)
+                {
+                    if (_player1 == null) SpawnPlayer1Remote();
+                    if (_player2 == null) SpawnPlayer2Local();
+                }
             }
 
             // 1) Dispatch des messages reçus (thread Unity)
@@ -361,25 +375,29 @@ namespace MiSideCoop.Network
             }
         }
 
-        private bool _player1RemoteDeferredLogged;
         private void SpawnPlayer1Remote()
         {
+            // v1.3.8 — REFONTE :
+            //
+            // En v1.3.7 cette méthode appelait FindMCGameObject() côté guest,
+            // ce qui retournait `Player2_Self` (l'avatar local du guest) parce
+            // que Camera.main est tagguée MainCamera sur Player2Camera → root =
+            // Player2_Self. Conséquence : Player1Avatar (la représentation
+            // distante du host) était attaché sur le PROPRE corps du guest.
+            //
+            // Le concept même était faux : il n'y a PAS de "MC du host" sur la
+            // machine du guest. Le host est sur sa machine. Le guest doit juste
+            // afficher un avatar fantôme synthétique (capsule humanoïde) qui
+            // suit les positions reçues du réseau — exactement comme on fait
+            // pour Player2 côté host (SpawnPlayer2Remote).
+            //
+            // → On crée un CreateDefaultHumanoid dédié, plus aucun FindMC.
             try
             {
-                var go = FindMCGameObject();
-                if (go == null)
-                {
-                    if (!_player1RemoteDeferredLogged)
-                    {
-                        _player1RemoteDeferredLogged = true;
-                        MiSideCoopPlugin.Logger.LogInfo(
-                            "[Co-op] Remote Player1 spawn deferred — no MC GameObject yet.");
-                    }
-                    return;
-                }
-                _player1RemoteDeferredLogged = false;
-                _player1 = go.GetComponent<Player1Avatar>()
-                        ?? go.AddComponentSafe<Player1Avatar>();
+                if (_player1 != null) return; // déjà spawné
+
+                var go = CreateDefaultHumanoid("Player1_Host_Remote");
+                _player1 = go.AddComponentSafe<Player1Avatar>();
                 if (_player1 == null)
                 {
                     MiSideCoopPlugin.Logger.LogError(
@@ -388,7 +406,7 @@ namespace MiSideCoop.Network
                 }
                 _player1.Initialize("Host", false);
                 MiSideCoopPlugin.Logger.LogInfo(
-                    $"[Co-op] Remote MC representation initialized on '{go.name}'.");
+                    "[Co-op] Remote Player1 (host ghost) spawned on synthetic humanoid.");
             }
             catch (Exception ex)
             {

@@ -26,38 +26,47 @@ namespace MiSideCoop.Avatars
         /// Cherche le GameObject correspondant au MC dans la scène active via
         /// une heuristique multi-critères, IL2CPP-safe.
         ///
-        /// Stratégie :
-        ///   1) Tentative par nom exact (liste élargie 0.93L-aware).
-        ///   2) Heuristique : descendant de Camera.main.transform.root qui porte
-        ///      un Rigidbody OU un CharacterController + un Animator (en lui
-        ///      ou en descendant), et dont le nom ne ressemble pas à Mita.
-        ///   3) Fallback : Camera.main.transform.root nu, comme avant.
+        /// Stratégie (v1.3.8 — STRICT, sans fallback sur scene-root) :
+        ///   1) Tentative par nom exact (liste élargie 0.93L-aware), MAIS on
+        ///      rejette les matches qui ressemblent à des racines de scène
+        ///      neutres ('World', 'GameController', etc.) — ils existent au
+        ///      menu principal et donnent un faux positif.
+        ///   2) Heuristique stricte sous Camera.main.transform.root : descendant
+        ///      avec (Rigidbody OU CharacterController) + Animator (lui-même ou
+        ///      en descendant), nom non-Mita ET non-scene-root. Retourne le
+        ///      premier match.
+        ///   3) PAS DE FALLBACK sur Camera.main.transform.root nu. Si aucun
+        ///      candidat ne ressemble à un MC réel, on retourne null. Le
+        ///      caller doit déférer le spawn jusqu'à la scène suivante.
+        ///
+        /// Pourquoi pas de fallback ? En v1.3.7 le fallback retournait 'World'
+        /// (root du menu MiSide) ou 'GameController' (root du loading screen),
+        /// ce qui faisait que Player1Avatar était attaché sur la racine de
+        /// scène et que sa position ne bougeait jamais. Mieux vaut différer
+        /// le spawn proprement que d'attacher sur n'importe quoi.
         /// </summary>
         public static GameObject FindMcHeuristic()
         {
             // 1) Noms candidats — version étendue pour MiSide 0.93L.
-            //    On garde "male_mc" historique au top puis on élargit.
             string[] names =
             {
                 "male_mc", "Male_MC", "MaleMC",
-                "MC", "Mc", "mc",
+                "MC", "Mc",
                 "PlayerCharacter", "MainCharacter", "Main_Character",
                 "PlayerController", "Player_Character",
                 "Hero", "Protagonist",
                 "Mita_MC", "Player_MC", "MC_Player",
-                "Character", "Char_Player",
             };
             foreach (var n in names)
             {
                 var go = SafeFind(n);
-                if (go != null) return go;
+                if (go == null) continue;
+                if (LooksLikeSceneRoot(go.name) || LooksLikeMenu(go.name) || LooksLikeMita(go.name))
+                    continue;
+                return go;
             }
 
-            // 2) Heuristique via Camera.main.transform.root.
-            //    On scanne RÉCURSIVEMENT le sous-arbre, on prend le premier
-            //    nœud qui a (Rigidbody OU CharacterController) + Animator
-            //    quelque part, et dont le nom ne contient pas de mot
-            //    "mita/menu/canvas/ui".
+            // 2) Heuristique stricte sous Camera.main.transform.root.
             try
             {
                 var cam = Camera.main;
@@ -77,18 +86,8 @@ namespace MiSideCoop.Avatars
                     $"[Co-op] FindMcHeuristic camera traversal failed: {ex.Message}");
             }
 
-            // 3) Fallback : root de la caméra principale (comportement v1.3.6).
-            try
-            {
-                var cam = Camera.main;
-                if (cam != null)
-                {
-                    var root = cam.transform.root.gameObject;
-                    if (root != null && !LooksLikeMenu(root.name)) return root;
-                }
-            }
-            catch { }
-
+            // 3) Pas de fallback. Si rien ne correspond à un MC plausible,
+            //    on retourne null et le caller défère.
             return null;
         }
 
@@ -213,7 +212,11 @@ namespace MiSideCoop.Avatars
         {
             if (tr == null) return null;
             var go = tr.gameObject;
-            if (go != null && go.activeInHierarchy && !LooksLikeMenu(go.name) && !LooksLikeMita(go.name))
+            if (go != null && go.activeInHierarchy
+                && !LooksLikeMenu(go.name)
+                && !LooksLikeMita(go.name)
+                && !LooksLikeSceneRoot(go.name)
+                && !LooksLikeOurOwnAvatar(go.name))
             {
                 bool hasRb = Has<Rigidbody>(go) || Has<CharacterController>(go);
                 if (hasRb)
@@ -261,6 +264,35 @@ namespace MiSideCoop.Avatars
             if (string.IsNullOrEmpty(n)) return false;
             var lo = n.ToLowerInvariant();
             return lo.Contains("mita") || lo.Contains("person") || lo.Contains("npc");
+        }
+
+        /// <summary>
+        /// v1.3.8 — Filtre les racines de scène neutres comme 'World',
+        /// 'GameController', 'Scene', 'Main', 'Root'… Ces noms étaient pris
+        /// pour le MC en v1.3.7 quand on était au menu/loading.
+        /// </summary>
+        private static bool LooksLikeSceneRoot(string n)
+        {
+            if (string.IsNullOrEmpty(n)) return true;
+            var lo = n.ToLowerInvariant();
+            return lo == "world"     || lo == "scene"        || lo == "main"   ||
+                   lo == "root"      || lo == "level"        ||
+                   lo.Contains("gamecontroller") || lo.Contains("gamemanager") ||
+                   lo.Contains("scenemanager")   || lo.Contains("levelloader") ||
+                   lo.Contains("dontdestroy");
+        }
+
+        /// <summary>
+        /// v1.3.8 — Filtre nos propres avatars créés par le mod, pour ne pas
+        /// qu'ils soient pris pour le MC (cas critique : sur le guest, le
+        /// Player2Camera est tagguée MainCamera → Camera.main.transform.root
+        /// = Player2_Self, qui matchait notre heuristique en v1.3.7).
+        /// </summary>
+        private static bool LooksLikeOurOwnAvatar(string n)
+        {
+            if (string.IsNullOrEmpty(n)) return false;
+            return n == "Player2_Self" || n == "Player2_Guest" ||
+                   n == "Player1_Host_Remote";
         }
 
         private static string PathOf(Transform tr)
