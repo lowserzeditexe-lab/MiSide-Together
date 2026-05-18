@@ -204,6 +204,23 @@ namespace MiSideCoop.UI
                 if (_pingTimer >= 1f) { _pingTimer = 0f; _pingMs = -1; }
             }
             UpdateHud();
+
+            // 4. v1.4.2 — Rafraîchir le statut du panneau Create-Room quand
+            // le guest se connecte. Avant, le label restait figé sur
+            // "Room created. Share the code and wait for guest…" même après
+            // que le guest avait rejoint (cf. logs/screenshots v1.4.1).
+            // Maintenant on rétro-affiche "Guest connected: <name>" pour que
+            // le host sache que le pairing est OK sans devoir fermer le menu.
+            if (_createStatusText != null && nm != null && nm.IsHost && nm.IsConnected)
+            {
+                bool hasGuest = !string.IsNullOrEmpty(nm.ConnectedPlayerName)
+                              && nm.ConnectedPlayerName != "...";
+                if (hasGuest && _createStatusText.text != $"Guest connected: {nm.ConnectedPlayerName}")
+                {
+                    SetStatus(_createStatusText,
+                        $"Guest connected: {nm.ConnectedPlayerName}", TXT_OK);
+                }
+            }
         }
 
         /// <summary>

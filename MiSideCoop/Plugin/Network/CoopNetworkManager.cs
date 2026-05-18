@@ -265,8 +265,26 @@ namespace MiSideCoop.Network
         private void OnSceneChange(SceneChangeMessage msg)
         {
             if (_isHost) return; // l'hôte initie, le client suit
-            MiSideCoopPlugin.Logger.LogInfo($"[Co-op] Scene change to '{msg.SceneName}'.");
-            SceneManager.LoadScene(msg.SceneName);
+            // v1.4.2 — PIVOT (suite du v1.4.1) :
+            //
+            // Avant v1.4.2, on appelait SceneManager.LoadScene(msg.SceneName)
+            // côté guest pour forcer la scène à matcher celle du host. Mais
+            // ce LoadScene bypass complètement la machine d'état MiSide
+            // (intro, init save state, audio, etc.). MiSide démarre Scene 1
+            // sans les données dont ses scripts ont besoin → NullReferenceException
+            // pendant le load → kill de la pump TCP → guest disconnect.
+            //
+            // Dans l'architecture co-présence visuelle (v1.4.1), forcer le
+            // scene sync n'a plus de sens : chaque joueur joue MiSide
+            // normalement sur sa machine. Quand les deux sont naturellement
+            // dans la même scène, les fantômes s'affichent. Sinon, ils ne
+            // se voient pas (cohérent).
+            //
+            // → On garde le LOG informationnel (utile pour debug et pour que
+            //   l'utilisateur sache où en est le peer), mais on n'appelle
+            //   plus SceneManager.LoadScene.
+            MiSideCoopPlugin.Logger.LogInfo(
+                $"[Co-op] Peer is now in scene '{msg.SceneName}' (we stay in our own scene).");
         }
 
         private void OnCutscene(CutsceneMessage msg)
