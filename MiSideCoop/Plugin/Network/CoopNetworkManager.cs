@@ -293,13 +293,14 @@ namespace MiSideCoop.Network
                     return;
                 }
                 _player1DeferredLogged = false; // reset si on a retrouvé le MC
-                // v1.3.5 — AddComponent<Player1Avatar>() peut planter avec
-                // "MethodInfoStoreGeneric_AddComponent_Public_T_0`1 type initializer
-                // threw an exception" en IL2CPP MiSide pour certains types T.
-                // On utilise l'overload non-générique AddComponent(Type) qui
-                // bypasse le dispatcher générique IL2CPP.
+                // v1.3.6 — Le AddComponent(typeof(T)) introduit en v1.3.5
+                // (System.Type) est STRIPPÉ en IL2CPP MiSide. On utilise
+                // notre helper Il2CppAddComponentHelper.AddComponentSafe<T>
+                // qui tente d'abord AddComponent(Il2CppSystem.Type) via
+                // réflexion (path IL2CPP-safe définitive), puis fallback
+                // sur AddComponent<T>() générique pour les types enregistrés.
                 _player1 = mcGo.GetComponent<Player1Avatar>()
-                        ?? (mcGo.AddComponent(typeof(Player1Avatar)) as Player1Avatar);
+                        ?? mcGo.AddComponentSafe<Player1Avatar>();
                 if (_player1 == null)
                 {
                     MiSideCoopPlugin.Logger.LogError(
@@ -321,7 +322,7 @@ namespace MiSideCoop.Network
             try
             {
                 var go = CreateDefaultHumanoid("Player2_Guest");
-                _player2 = go.AddComponent(typeof(Player2Avatar)) as Player2Avatar;
+                _player2 = go.AddComponentSafe<Player2Avatar>();
                 if (_player2 == null)
                 {
                     MiSideCoopPlugin.Logger.LogError(
@@ -343,7 +344,7 @@ namespace MiSideCoop.Network
             try
             {
                 var go = CreateDefaultHumanoid("Player2_Self");
-                _player2 = go.AddComponent(typeof(Player2Avatar)) as Player2Avatar;
+                _player2 = go.AddComponentSafe<Player2Avatar>();
                 if (_player2 == null)
                 {
                     MiSideCoopPlugin.Logger.LogError(
@@ -378,7 +379,7 @@ namespace MiSideCoop.Network
                 }
                 _player1RemoteDeferredLogged = false;
                 _player1 = go.GetComponent<Player1Avatar>()
-                        ?? (go.AddComponent(typeof(Player1Avatar)) as Player1Avatar);
+                        ?? go.AddComponentSafe<Player1Avatar>();
                 if (_player1 == null)
                 {
                     MiSideCoopPlugin.Logger.LogError(
