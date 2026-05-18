@@ -38,14 +38,6 @@
     <PackageReference Include="UnityEngine.Modules" Version="2021.3.18" IncludeAssets="compile" />
   </ItemGroup>
 
-  <!-- Référence locale : UnityEngine.UI (uGUI - Button, Text, InputField) -->
-  <ItemGroup>
-    <Reference Include="UnityEngine.UI">
-      <HintPath>Refs\UnityEngine.UI.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-  </ItemGroup>
-
   <!-- ================================================================
        Fichiers sources C#
        ================================================================ -->
@@ -62,14 +54,13 @@
     <Compile Include="Plugin\Avatars\Player1Avatar.cs" />
     <Compile Include="Plugin\Avatars\Player2Avatar.cs" />
     <Compile Include="Plugin\Relay\RoomManager.cs" />
-    <Compile Include="Plugin\Patches\Il2CppTypeResolver.cs" />
     <Compile Include="Plugin\Patches\MovementPatch.cs" />
     <Compile Include="Plugin\Patches\InteractionPatch.cs" />
     <Compile Include="Plugin\Patches\DoorPatch.cs" />
     <Compile Include="Plugin\Patches\PickupPatch.cs" />
     <Compile Include="Plugin\Patches\ScenePatch.cs" />
     <Compile Include="Plugin\UI\CoopMenuUI.cs" />
-    <!-- Plugin\Utils\BootstrapRecovery.cs supprimé en v1.1.3 - Internal_SceneLoaded suffit -->
+    <Compile Include="Plugin\Utils\BootstrapRecovery.cs" />
   </ItemGroup>
 
 </Project>
