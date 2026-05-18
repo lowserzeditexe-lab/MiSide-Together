@@ -171,6 +171,8 @@ namespace MiSideCoop.Network
                     { var m = new RoomJoinMessage();     m.Read(br); OnRoomJoin(m); break; }
                 case MsgId.ObjectSync:
                     { var m = new ObjectSyncMessage();   m.Read(br); OnObjectSync(m); break; }
+                case MsgId.GameLaunch:
+                    { var m = new GameLaunchMessage();   m.Read(br); OnGameLaunch(m); break; }
             }
         }
 
@@ -298,6 +300,39 @@ namespace MiSideCoop.Network
             if (msg.IsActive) obj.transform.position = msg.Position;
         }
 
+        // ── v1.5.0 — Lancement synchronisé "Nouvelle Partie" ─────────────────
+        private void OnGameLaunch(GameLaunchMessage msg)
+        {
+            if (_isHost) return; // l'hôte initie, on n'echo pas chez soi
+            MiSideCoopPlugin.Logger.LogInfo(
+                "[Co-op] Host pressed DÉMARRER — invoking 'Nouvelle Partie' on guest.");
+            bool ok = MiSideCoop.UI.MenuButtonClicker.ClickNewGame();
+            if (!ok)
+            {
+                MiSideCoopPlugin.Logger.LogWarning(
+                    "[Co-op] Could not auto-click 'Nouvelle Partie' on guest "
+                  + "(button not found — probably already in-game or different menu). "
+                  + "The guest can still click Nouvelle Partie manually.");
+            }
+        }
+
+        /// <summary>
+        /// Envoyé par l'hôte uniquement (appelé par le bouton "DÉMARRER" du
+        /// modal co-op). Le guest reçoit GameLaunchMessage et déclenche
+        /// localement le bouton "Nouvelle Partie" du menu MiSide.
+        /// </summary>
+        public void BroadcastGameLaunch()
+        {
+            if (!_isHost || !IsConnected)
+            {
+                MiSideCoopPlugin.Logger.LogWarning(
+                    "[Co-op] BroadcastGameLaunch ignored — not host or not connected.");
+                return;
+            }
+            _tx.Send(new GameLaunchMessage());
+            MiSideCoopPlugin.Logger.LogInfo("[Co-op] GameLaunch broadcasted to guest.");
+        }
+
         // ── Gestion des avatars ───────────────────────────────────────────────
         //
         // Chaque Spawn est enveloppé pour qu'un échec IL2CPP n'interrompe pas
@@ -360,7 +395,12 @@ namespace MiSideCoop.Network
         {
             try
             {
-                var go = CreateDefaultHumanoid("Player2_Guest");
+                // v1.5.0 — On tente d'abord un clone 3D du MC local (modèle
+                // complet de MiSide). Si ça échoue (MC pas trouvé, IL2CPP
+                // Instantiate problème, etc.), on retombe sur l'humanoïde
+                // synthétique capsule + sphère des v1.3.x — v1.4.x.
+                var go = MiSideCoop.Avatars.RealMcCloner.CloneLocalMc("Player2_Guest")
+                       ?? CreateDefaultHumanoid("Player2_Guest");
                 _player2 = go.AddComponentSafe<Player2Avatar>();
                 if (_player2 == null)
                 {
@@ -456,7 +496,9 @@ namespace MiSideCoop.Network
             {
                 if (_player1 != null) return; // déjà spawné
 
-                var go = CreateDefaultHumanoid("Player1_Host_Remote");
+                // v1.5.0 — Clone 3D du MC local d'abord, fallback synthétique.
+                var go = MiSideCoop.Avatars.RealMcCloner.CloneLocalMc("Player1_Host_Remote")
+                       ?? CreateDefaultHumanoid("Player1_Host_Remote");
                 _player1 = go.AddComponentSafe<Player1Avatar>();
                 if (_player1 == null)
                 {

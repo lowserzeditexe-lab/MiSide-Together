@@ -83,6 +83,7 @@ namespace MiSideCoop.UI
 
         private readonly List<CustomButton> _buttons = new List<CustomButton>();
         private CustomButton _joinSubmit;
+        private CustomButton _hostStartButton;   // v1.5.0 — bouton "DÉMARRER" du modal host
 
         // ── Couleurs — palette "Mita" (purple/magenta sur très sombre) ────────
         private static readonly Color BG_OVERLAY   = new Color(0f, 0f, 0f, 0.78f);
@@ -211,15 +212,22 @@ namespace MiSideCoop.UI
             // que le guest avait rejoint (cf. logs/screenshots v1.4.1).
             // Maintenant on rétro-affiche "Guest connected: <name>" pour que
             // le host sache que le pairing est OK sans devoir fermer le menu.
+            //
+            // v1.5.0 — Le bouton "DÉMARRER" est activé/désactivé visuellement
+            // selon l'état de connexion du guest. Tant qu'aucun peer n'est
+            // identifié, on garde le bouton grisé.
             if (_createStatusText != null && nm != null && nm.IsHost && nm.IsConnected)
             {
                 bool hasGuest = !string.IsNullOrEmpty(nm.ConnectedPlayerName)
                               && nm.ConnectedPlayerName != "...";
-                if (hasGuest && _createStatusText.text != $"Guest connected: {nm.ConnectedPlayerName}")
+                if (hasGuest && _createStatusText.text != $"Guest connected: {nm.ConnectedPlayerName}"
+                    && _createStatusText.text != "Launching game on both sides…")
                 {
                     SetStatus(_createStatusText,
                         $"Guest connected: {nm.ConnectedPlayerName}", TXT_OK);
                 }
+                if (_hostStartButton != null && _hostStartButton.Interactable != hasGuest)
+                    _hostStartButton.Interactable = hasGuest;
             }
         }
 
@@ -769,10 +777,56 @@ namespace MiSideCoop.UI
                 }
             });
 
-            AddCustomButton(p, 268f, "CLOSE MENU  ·  KEEP SERVER RUNNING", () => ShowState(MenuState.Closed));
-            AddCustomButton(p, 336f, "CANCEL AND CLOSE SESSION", CancelSession);
+            // v1.5.0 — Bouton "DÉMARRER" : lance Nouvelle Partie en simultané
+            // sur les deux machines. Disabled tant que le guest n'est pas
+            // connecté (visuel grisé). Quand cliqué :
+            //   1) Invoque MenuButtonClicker.ClickNewGame() localement → MiSide
+            //      lance sa Nouvelle Partie normale côté host.
+            //   2) Envoie GameLaunchMessage au guest → côté guest, le mod
+            //      invoque pareil ClickNewGame() programmatiquement → MiSide
+            //      du guest lance sa Nouvelle Partie au même instant.
+            //   3) Ferme le menu co-op (le jeu prend le relais).
+            _hostStartButton = AddCustomButton(p, 268f, "DÉMARRER (HOST + GUEST)", () =>
+            {
+                var nm = CoopNetworkManager.Instance;
+                if (nm == null || !nm.IsConnected || !nm.IsHost) return;
+                bool hasGuest = !string.IsNullOrEmpty(nm.ConnectedPlayerName)
+                              && nm.ConnectedPlayerName != "...";
+                if (!hasGuest)
+                {
+                    SetStatus(_createStatusText, "Cannot start: no guest connected yet.", TXT_DIM);
+                    return;
+                }
+                // 1) Broadcast au guest AVANT de cliquer localement — si le
+                //    clic local nous fait perdre la main (changement de scène),
+                //    le message a déjà été envoyé.
+                try { nm.BroadcastGameLaunch(); }
+                catch (Exception ex)
+                {
+                    MiSideCoopPlugin.Logger?.LogError(
+                        $"[Co-op] BroadcastGameLaunch failed: {ex.Message}");
+                }
+                // 2) Clic local sur Nouvelle Partie du menu MiSide.
+                bool localOk = MenuButtonClicker.ClickNewGame();
+                if (!localOk)
+                {
+                    SetStatus(_createStatusText,
+                        "Local 'Nouvelle Partie' button not found. Click it manually in MiSide menu.",
+                        TXT_DIM);
+                }
+                else
+                {
+                    SetStatus(_createStatusText, "Launching game on both sides…", TXT_OK);
+                }
+                // 3) Ferme le menu co-op (laisse MiSide gérer la cinématique).
+                ShowState(MenuState.Closed);
+            });
+            _hostStartButton.Interactable = false; // disabled tant que pas de guest
 
-            _createStatusText = AddLabel(p, 400f, "", 13, TXT_DIM, TextAnchor.MiddleCenter);
+            AddCustomButton(p, 336f, "CLOSE MENU  ·  KEEP SERVER RUNNING", () => ShowState(MenuState.Closed));
+            AddCustomButton(p, 404f, "CANCEL AND CLOSE SESSION", CancelSession);
+
+            _createStatusText = AddLabel(p, 468f, "", 13, TXT_DIM, TextAnchor.MiddleCenter);
             return p;
         }
 

@@ -16,6 +16,7 @@ namespace MiSideCoop.Network
         Cutscene      = 4,
         RoomJoin      = 5,
         ObjectSync    = 6,
+        GameLaunch    = 7,   // v1.5.0 — host clique "Démarrer" → guest auto-click "Nouvelle Partie"
     }
 
     public interface INetMessage
@@ -148,5 +149,17 @@ namespace MiSideCoop.Network
         { w.Write(ObjectId ?? string.Empty); w.Write(IsActive); w.Write(Position); }
         public void Read(BinaryReader r)
         { ObjectId = r.ReadString(); IsActive = r.ReadBoolean(); Position = r.ReadVector3(); }
+    }
+
+    // ── v1.5.0 — Lancement synchronisé de la partie ──────────────────────────
+    // Émis par l'hôte quand il clique le bouton "Démarrer" dans le modal co-op.
+    // Le guest, en recevant ce message, invoque programmatiquement le bouton
+    // "Nouvelle Partie" / "New Game" de son menu MiSide pour démarrer la partie
+    // au même instant que l'hôte. Pas de payload utile.
+    public struct GameLaunchMessage : INetMessage
+    {
+        public MsgId Id => MsgId.GameLaunch;
+        public void Write(BinaryWriter w) { w.Write((byte)0); }
+        public void Read(BinaryReader r)  { r.ReadByte(); }
     }
 }
