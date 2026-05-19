@@ -1,0 +1,30 @@
+[
+  {
+    "content": "Bump version 1.5.4 → 1.5.5",
+    "status": "completed"
+  },
+  {
+    "content": "Fix AutoUpdater.BuildPowerShellScript: relaunch via run_bepinex.bat if present",
+    "status": "completed"
+  },
+  {
+    "content": "Rebuild DLL",
+    "status": "completed"
+  },
+  {
+    "content": "Re-create ZIP v1.5.4 with flat root structure (no wrapper folder)",
+    "status": "completed"
+  },
+  {
+    "content": "Replace ZIP asset on existing v1.5.4 release",
+    "status": "completed"
+  },
+  {
+    "content": "Create ZIP v1.5.5 with flat root structure",
+    "status": "completed"
+  },
+  {
+    "content": "Push commit + tag v1.5.5, publish release with DLL + ZIP assets",
+    "status": "completed"
+  }
+]
