@@ -51,13 +51,17 @@ namespace MiSideCoop.Network
             IsLocalPlayer = isLocal;
 
             // v1.6.0 — Résolution robuste de l'Animator : préférer celui qui
-            // a un runtimeAnimatorController valide ET parameterCount > 0.
-            // Sur le ghost (clone 'Person'), il y a souvent 2 Animators :
-            //   • Animator sur root 'Player2_Guest' (controller='', invalide)
+            // a au moins 1 paramètre (controller fonctionnel). Sur le ghost
+            // (clone 'Person'), il y a souvent 2+ Animators :
+            //   • Animator sur root 'Player2_Guest' (parameterCount=0 → exclu)
             //   • Animator sur un enfant (Hips/Person/...) avec le vrai
-            //     controller MiSide
+            //     controller MiSide (parameterCount=15)
             // Sans ce filtre, GetComponent<Animator>() prend le 1er trouvé
             // (= invalide) → Animator.Play(hash) no-op, ghost reste en T-pose.
+            //
+            // v1.6.9 — NE PAS filtrer sur runtimeAnimatorController : en
+            // IL2CPP MiSide cet accesseur retourne null même sur un Animator
+            // valide (property strippée). Critère = parameterCount > 0 only.
             _animator = ResolveBestAnimator(gameObject);
             _animSync  = GetComponent<AvatarAnimatorSync>() ?? gameObject.AddComponent<AvatarAnimatorSync>();
 
@@ -120,7 +124,7 @@ namespace MiSideCoop.Network
         }
 
         // v1.6.0 — Choisit le meilleur Animator dans la hiérarchie :
-        // celui qui a un controller assigné ET au moins 1 paramètre.
+        // celui qui a au moins 1 paramètre (= un controller fonctionnel).
         // Préférence aux GO nommés 'Person*'. Fallback sur le 1er Animator.
         //
         // v1.6.3 — Reconnait aussi les noms de root clonés (Player2_Guest,
@@ -129,6 +133,15 @@ namespace MiSideCoop.Network
         // après Instantiate. Sans cet ajout, ResolveBestAnimator pouvait
         // tomber sur un Animator enfant accessoire au lieu du body Animator
         // racine porteur du blend tree de mouvement → animations cassées.
+        //
+        // v1.6.9 — FIX CRITIQUE : on n'utilise PLUS `runtimeAnimatorController`
+        // comme critère de filtrage. En IL2CPP MiSide cet accesseur retourne
+        // `null` même sur un Animator parfaitement valide (property strippée
+        // — cf. log v1.6.7/v1.6.8 : "controller='', params=15"). Le filtre
+        // `hasCtrl && pc > 0` excluait donc TOUS les Animators et faisait
+        // tomber dans le fallback "premier Animator quel que soit son état"
+        // → on récupérait 'Player Arms' (pc=0) au lieu de 'Person' (pc=15).
+        // Critère robuste : `parameterCount > 0` uniquement (idem RealMcCloner.PickBestAnimatorForEnum).
         private static Animator ResolveBestAnimator(GameObject root)
         {
             if (root == null) return null;
@@ -139,22 +152,19 @@ namespace MiSideCoop.Network
                 foreach (var a in all)
                 {
                     if (a == null) continue;
-                    bool hasCtrl = false;
-                    int  pc      = 0;
-                    try { hasCtrl = a.runtimeAnimatorController != null; } catch { }
-                    try { pc      = a.parameterCount; }                    catch { }
-                    if (hasCtrl && pc > 0)
-                    {
-                        string goName = string.Empty;
-                        try { goName = a.gameObject.name; } catch { }
-                        // v1.6.3 — Priorité étendue : 'Person*' ET noms de root clonés.
-                        if (!string.IsNullOrEmpty(goName) &&
-                            (goName.StartsWith("Person")
-                             || goName == "Player2_Guest"
-                             || goName == "Player1_Host_Remote"))
-                            return a;
-                        if (best == null) best = a;
-                    }
+                    int pc = 0;
+                    try { pc = a.parameterCount; } catch { }
+                    if (pc <= 0) continue;
+
+                    string goName = string.Empty;
+                    try { goName = a.gameObject.name; } catch { }
+                    // v1.6.3 — Priorité étendue : 'Person*' ET noms de root clonés.
+                    if (!string.IsNullOrEmpty(goName) &&
+                        (goName.StartsWith("Person")
+                         || goName == "Player2_Guest"
+                         || goName == "Player1_Host_Remote"))
+                        return a;
+                    if (best == null) best = a;
                 }
                 if (best != null) return best;
                 // Fallback : 1er Animator quel que soit son état

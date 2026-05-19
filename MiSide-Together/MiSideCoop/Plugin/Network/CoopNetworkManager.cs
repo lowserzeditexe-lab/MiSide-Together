@@ -223,8 +223,12 @@ namespace MiSideCoop.Network
             // Le 1er trouvé par GetComponentInChildren est "Player Arms" → mauvais.
             //
             // v1.6.0 — Si Find("Person") échoue (rare), on scanne TOUS les
-            // Animators et on garde celui dont runtimeAnimatorController != null
-            // ET parameterCount > 0 (= controller MiSide valide).
+            // Animators et on garde celui dont parameterCount > 0
+            // (= controller MiSide valide et fonctionnel).
+            //
+            // v1.6.9 — NE PAS filtrer sur runtimeAnimatorController : en
+            // IL2CPP MiSide cet accesseur retourne null même sur un Animator
+            // valide (property strippée). Critère = parameterCount > 0 only.
             Animator animator = ResolvePersonAnimator(localAvatar);
 
             // v1.5.0 — Capture state-hash + normalizedTime pour replay direct.
@@ -383,8 +387,18 @@ namespace MiSideCoop.Network
             }
             catch { }
 
-            // 2) Scanne tous les Animators et garde celui qui a un controller
-            //    valide ET au moins 1 paramètre.
+            // 2) Scanne tous les Animators et garde celui qui a au moins
+            //    1 paramètre (= controller fonctionnel).
+            //
+            //    v1.6.9 — FIX CRITIQUE : on n'utilise PLUS `runtimeAnimatorController`
+            //    comme critère de filtrage. En IL2CPP MiSide cet accesseur retourne
+            //    `null` même sur un Animator parfaitement valide (property strippée
+            //    — cf. log v1.6.7/v1.6.8 : "controller='', params=15"). Le filtre
+            //    `hasCtrl && pc > 0` faisait passer le sender host sur un Animator
+            //    accessoire (Player Arms / Smartphone) ou en fallback nu au lieu
+            //    de l'Animator 'Person' porteur du blend tree de mouvement.
+            //    Critère robuste : `parameterCount > 0` uniquement
+            //    (idem RealMcCloner.PickBestAnimatorForEnum et PlayerAvatar.ResolveBestAnimator).
             try
             {
                 var all = localAvatar.GetComponentsInChildrenSafe<Animator>(true);
@@ -392,19 +406,16 @@ namespace MiSideCoop.Network
                 foreach (var a in all)
                 {
                     if (a == null) continue;
-                    bool hasCtrl = false;
-                    int  pc      = 0;
-                    try { hasCtrl = a.runtimeAnimatorController != null; } catch { }
-                    try { pc      = a.parameterCount; }                    catch { }
-                    if (hasCtrl && pc > 0)
-                    {
-                        // Préfère explicitement celui sur un GO 'Person*'.
-                        var goName = string.Empty;
-                        try { goName = a.gameObject.name; } catch { }
-                        if (goName != null && goName.StartsWith("Person"))
-                            return a;
-                        if (best == null) best = a;
-                    }
+                    int pc = 0;
+                    try { pc = a.parameterCount; } catch { }
+                    if (pc <= 0) continue;
+
+                    // Préfère explicitement celui sur un GO 'Person*'.
+                    var goName = string.Empty;
+                    try { goName = a.gameObject.name; } catch { }
+                    if (goName != null && goName.StartsWith("Person"))
+                        return a;
+                    if (best == null) best = a;
                 }
                 if (best != null) return best;
             }
