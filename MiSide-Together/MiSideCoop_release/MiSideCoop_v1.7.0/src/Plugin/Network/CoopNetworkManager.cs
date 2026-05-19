@@ -1,0 +1,1125 @@
+using System;
+using System.IO;
+using Il2CppInterop.Runtime.Attributes;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+using MiSideCoop.Avatars;
+
+namespace MiSideCoop.Network
+{
+    /// <summary>
+    /// Gestionnaire réseau principal du mod co-op.
+    ///
+    /// Architecture sans dépendance externe : le transport est un TCP brut
+    /// (System.Net.Sockets). Les messages sont sérialisés en binaire et
+    /// dispatchés depuis le main thread Unity via Update().
+    /// </summary>
+    public class CoopNetworkManager : MonoBehaviour
+    {
+
+        // ── Singleton ─────────────────────────────────────────────────────────
+        public static CoopNetworkManager Instance { get; private set; }
+
+        // ── État de connexion ─────────────────────────────────────────────────
+        public bool   IsConnected         => _isHost || _isClient;
+        public bool   IsHost              => _isHost;
+        public string RoomCode            { get; private set; }
+        public string ConnectedPlayerName { get; private set; } = "...";
+
+        private bool _isHost;
+        private bool _isClient;
+
+        // ── Avatars ───────────────────────────────────────────────────────────
+        private Player1Avatar _player1;
+        private Player2Avatar _player2;
+
+        // v1.4.5 — Tracking "spawné via fallback synthétique" pour pouvoir
+        // upgrader vers un clone 3D RealMcCloner dès que le MC local devient
+        // disponible (ex: après que l'host quitte le menu principal et entre
+        // en jeu). Sans ça, la capsule bleue restait là à vie même après
+        // que MC ait été chargé en scène.
+        private bool _player1IsSynthetic;
+        private bool _player2IsSynthetic;
+
+        // ── Transport ─────────────────────────────────────────────────────────
+        private CoopTcpTransport _tx;
+
+        // ── Sync cadence ──────────────────────────────────────────────────────
+        private const float SyncInterval = 0.05f;  // 20 Hz
+        private float _syncTimer;
+
+        // ── Lifecycle ─────────────────────────────────────────────────────────
+        private void Awake()
+        {
+            if (Instance != null) { Destroy(gameObject); return; }
+            Instance = this;
+            _tx = new CoopTcpTransport();
+            _tx.OnRemoteConnected    = OnRemotePeerConnected;
+            _tx.OnRemoteDisconnected = OnRemotePeerDisconnected;
+            _tx.OnConnectedToHost    = OnConnectedToHost;
+            _tx.OnConnectionError    = OnRelayConnectionError;
+        }
+
+        private void OnDestroy()
+        {
+            StopCoop();
+            if (Instance == this) Instance = null;
+        }
+
+        // ── API publique ──────────────────────────────────────────────────────
+
+        public void StartHost(string roomCode)
+        {
+            RoomCode = roomCode;
+            _isHost  = true;
+            var host = MiSideCoopPlugin.RelayHost.Value;
+            var port = MiSideCoopPlugin.RelayPort.Value;
+            _tx.StartHost(host, port, roomCode);
+            MiSideCoopPlugin.Logger.LogInfo(
+                $"[Co-op] Connecting to relay {host}:{port} as HOST. Code: {roomCode}");
+            SpawnPlayer1Local();
+        }
+
+        public void StartClient(string roomCode)
+        {
+            _isClient = true;
+            RoomCode  = roomCode;
+            var host = MiSideCoopPlugin.RelayHost.Value;
+            var port = MiSideCoopPlugin.RelayPort.Value;
+            _tx.StartGuest(host, port, roomCode);
+            MiSideCoopPlugin.Logger.LogInfo(
+                $"[Co-op] Connecting to relay {host}:{port} as GUEST. Code: {roomCode}");
+        }
+
+        public void StopCoop()
+        {
+            _tx?.Stop();
+            _isHost = false;
+            _isClient = false;
+            DestroyRemoteAvatars();
+            RoomCode = null;
+            ConnectedPlayerName = "...";
+            MiSideCoopPlugin.Logger.LogInfo("[Co-op] Co-op session ended.");
+        }
+
+        // ── Broadcasts publics (appelés depuis les Patches) ───────────────────
+        public void BroadcastAction(PlayerActionMessage msg)     => _tx.Send(msg);
+        public void BroadcastObjectSync(ObjectSyncMessage msg)   => _tx.Send(msg);
+        public void BroadcastSceneChange(SceneChangeMessage msg) { if (_isHost) _tx.Send(msg); }
+        public void BroadcastCutsceneMessage(CutsceneMessage msg){ if (_isHost) _tx.Send(msg); }
+
+        // v1.6.6 — Broadcasts pour la POV partagée pendant la séquence téléphone.
+        public void BroadcastSharedPov(bool enable, string ownerName)
+            => _tx?.Send(new SharedPovMessage { Enable = enable, OwnerName = ownerName ?? string.Empty });
+
+        public void BroadcastInputForward(string keyName, Vector3 origin)
+            => _tx?.Send(new InputForwardMessage { KeyName = keyName ?? string.Empty, OriginHint = origin });
+
+        // v1.6.8 — Broadcast d'activation/désactivation d'un hand-item.
+        public void BroadcastHandItem(HandItemMessage msg) => _tx?.Send(msg);
+
+        // ── Update : envoi de l'état local + pump des messages entrants ───────
+        private float _retrySpawnTimer;
+        private void Update()
+        {
+            // 0bis) Pump les notifications du transport (callbacks marshalées
+            //       depuis les threads socket → main thread Unity). À appeler
+            //       MÊME si !IsConnected pour récupérer les erreurs de connexion
+            //       et l'événement "PeerJoined" qui peut arriver pendant la
+            //       phase de pairing initiale.
+            _tx?.Pump();
+
+            if (!IsConnected) return;
+
+            // 0) Retry-spawn différé : si l'avatar local ou distant n'a pas pu
+            //    être créé (pas de PlayerMove côté host, ou GameObject détruit
+            //    sur changement de scène), on re-tente toutes les 2s. Dès que
+            //    le joueur entre en jeu, le MC apparaît → spawn OK.
+            //
+            // v1.3.8 — on retry aussi pour Player2 côté guest (les avatars
+            // synthétiques ne sont pas DontDestroyOnLoad → détruits au scene
+            // change, doivent être re-spawnés).
+            _retrySpawnTimer += Time.deltaTime;
+            if (_retrySpawnTimer >= 2f)
+            {
+                _retrySpawnTimer = 0f;
+                if (_isHost)
+                {
+                    if (_player1 == null) SpawnPlayer1Local();
+                    // Player2 (guest ghost) est respawné via OnRemotePeerConnected,
+                    // ou via retry ici si l'avatar a été détruit par un scene change.
+                    if (_player2 == null && !string.IsNullOrEmpty(ConnectedPlayerName)
+                        && ConnectedPlayerName != "...")
+                        SpawnPlayer2Remote();
+                    // v1.4.5 — Upgrade synthetic → 3D clone si le MC local
+                    // est désormais disponible (cas typique : host a créé
+                    // la room depuis le menu, et vient d'entrer en jeu).
+                    if (_player2IsSynthetic && _player2 != null)
+                        TryUpgradePlayer2ToClone();
+                }
+                else if (_isClient)
+                {
+                    if (_player1 == null) SpawnPlayer1Remote();
+                    if (_player2 == null) SpawnPlayer2Local();
+                    // v1.4.5 — Idem côté guest : upgrade Player1 fantôme.
+                    if (_player1IsSynthetic && _player1 != null)
+                        TryUpgradePlayer1ToClone();
+                }
+            }
+
+            // 1) Dispatch des messages reçus (thread Unity)
+            while (_tx.Incoming.TryDequeue(out var item))
+                Dispatch(item.id, item.payload);
+
+            // 2) Envoi de l'état local à cadence fixe
+            _syncTimer += Time.deltaTime;
+            if (_syncTimer < SyncInterval) return;
+            _syncTimer = 0f;
+            SendLocalState();
+        }
+
+        [HideFromIl2Cpp]
+        private void Dispatch(MsgId id, byte[] payload)
+        {
+            using var ms = new MemoryStream(payload);
+            using var br = new BinaryReader(ms);
+            switch (id)
+            {
+                case MsgId.PlayerState:
+                    { var m = new PlayerStateMessage();  m.Read(br); OnPlayerState(m); break; }
+                case MsgId.PlayerAction:
+                    { var m = new PlayerActionMessage(); m.Read(br); OnPlayerAction(m); break; }
+                case MsgId.SceneChange:
+                    { var m = new SceneChangeMessage();  m.Read(br); OnSceneChange(m); break; }
+                case MsgId.Cutscene:
+                    { var m = new CutsceneMessage();     m.Read(br); OnCutscene(m); break; }
+                case MsgId.RoomJoin:
+                    { var m = new RoomJoinMessage();     m.Read(br); OnRoomJoin(m); break; }
+                case MsgId.ObjectSync:
+                    { var m = new ObjectSyncMessage();   m.Read(br); OnObjectSync(m); break; }
+                case MsgId.GameLaunch:
+                    { var m = new GameLaunchMessage();   m.Read(br); OnGameLaunch(m); break; }
+                case MsgId.SharedPov:
+                    { var m = new SharedPovMessage();    m.Read(br); OnSharedPov(m); break; }
+                case MsgId.InputForward:
+                    { var m = new InputForwardMessage(); m.Read(br); OnInputForward(m); break; }
+                case MsgId.HandItem:
+                    { var m = new HandItemMessage();     m.Read(br); OnHandItem(m); break; }
+            }
+        }
+
+        // ── Envoi état local ──────────────────────────────────────────────────
+        private void SendLocalState()
+        {
+            MonoBehaviour localAvatar = _isHost ? (MonoBehaviour)_player1 : _player2;
+            if (localAvatar == null) return;
+
+            // v1.5.3 → v1.6.0 — Chercher prioritairement l'Animator de "Person"
+            // (3rd-person body, avec un controller MiSide complet) plutôt que
+            // celui de "Player Arms" (first-person arms, controller souvent vide).
+            // Le F10 dump (v1.5.2) a confirmé qu'il y a 2 Animators :
+            //   • Player/HeadPlayer/Player Arms (controller='')
+            //   • Player/Person (controller MiSide complet)
+            // Le 1er trouvé par GetComponentInChildren est "Player Arms" → mauvais.
+            //
+            // v1.6.0 — Si Find("Person") échoue (rare), on scanne TOUS les
+            // Animators et on garde celui dont parameterCount > 0
+            // (= controller MiSide valide et fonctionnel).
+            //
+            // v1.6.9 — NE PAS filtrer sur runtimeAnimatorController : en
+            // IL2CPP MiSide cet accesseur retourne null même sur un Animator
+            // valide (property strippée). Critère = parameterCount > 0 only.
+            Animator animator = ResolvePersonAnimator(localAvatar);
+
+            // v1.5.0 — Capture state-hash + normalizedTime pour replay direct.
+            int   stateHash = 0;
+            float stateNormTime = 0f;
+            if (animator != null)
+            {
+                try
+                {
+                    var info = animator.GetCurrentAnimatorStateInfo(0);
+                    stateHash = info.fullPathHash;
+                    // normalizedTime peut être > 1 si l'anim a déjà bouclé plusieurs
+                    // fois ; on garde la fraction pour rester dans [0;1].
+                    stateNormTime = info.normalizedTime - Mathf.Floor(info.normalizedTime);
+                }
+                catch { /* ignore — fallback sur stateHash=0 = no-op côté distant */ }
+            }
+
+            // v1.6.0 — Sample les VRAIS floats MiSide ('Forward'/'Right') qui
+            // pilotent le blend tree du Person Animator. C'est CE QUE LE JEU
+            // FAIT NORMALEMENT pour piloter l'animation du body 3rd-person.
+            float moveForward = 0f, moveRight = 0f;
+            if (animator != null)
+            {
+                try { moveForward = animator.GetFloat("Forward"); } catch { }
+                try { moveRight   = animator.GetFloat("Right");   } catch { }
+            }
+
+            // v1.6.1 — Sample le bool 'Sit' (crouch/sit pose) capturé via
+            // AnimatorDiagPatch. C'est le seul vrai bool MiSide pour le crouch.
+            bool isCrouching = false;
+            if (animator != null)
+            {
+                try { isCrouching = animator.GetBool("Sit"); } catch { }
+            }
+
+            // v1.6.1 — Sample la localRotation du head bone du MC. En MiSide,
+            // le mouse-look pilote l'os 'Head' (et parents) directement, hors
+            // Animator. Sans cette capture, le ghost a la tête figée droit
+            // devant même si le peer regarde haut/bas/côtés.
+            Quaternion headRot = Quaternion.identity;
+            try
+            {
+                var headBone = ResolveHeadBone(localAvatar.gameObject);
+                if (headBone != null) headRot = headBone.localRotation;
+            }
+            catch { }
+
+            var msg = new PlayerStateMessage
+            {
+                Position       = localAvatar.transform.position,
+                Rotation       = localAvatar.transform.rotation,
+                MoveSpeed      = SampleAnimatorSpeed(animator),
+                AnimationState = SampleAnimatorState(animator),
+                LookDirection  = localAvatar.transform.forward,
+                PlayerName     = MiSideCoopPlugin.LocalPlayerName.Value,
+                AnimatorStateHash      = stateHash,
+                AnimatorNormalizedTime = stateNormTime,
+                MoveForward    = moveForward,
+                MoveRight      = moveRight,
+                HeadRotation   = headRot,
+                IsCrouching    = isCrouching,
+            };
+            _tx.Send(msg);
+
+            // v1.6.3 — Throttled sender-side diagnostic log (mirror du log
+            // côté receiver dans PlayerAvatar.ApplyRemoteState). Permet de
+            // valider d'un seul coup d'œil que le sender sample bien sur le
+            // bon Animator (vrais hashes != 0, Forward/Right non nuls quand
+            // on bouge). Cadence ≈ 60 messages = ~3s à 20 Hz.
+            _sendDiagCount++;
+            if ((_sendDiagCount % 60) == 1)
+            {
+                string animName = "<null>", ctrlName = "<null>";
+                if (animator != null)
+                {
+                    try { animName  = animator.gameObject.name; } catch { }
+                    try { ctrlName  = animator.runtimeAnimatorController?.name ?? "<null>"; } catch { }
+                }
+                MiSideCoopPlugin.Logger?.LogInfo(
+                    $"[Co-op] send-diag '{msg.PlayerName}' #{_sendDiagCount}: "
+                  + $"animGO='{animName}' ctrl='{ctrlName}' "
+                  + $"hash={stateHash} normT={stateNormTime:F2} "
+                  + $"fwd={moveForward:F2} right={moveRight:F2} speed={msg.MoveSpeed:F2} "
+                  + $"sit={isCrouching} state='{msg.AnimationState}'");
+            }
+        }
+
+        // v1.6.3 — Compteur pour le diag log sender (throttled).
+        private int _sendDiagCount;
+
+        // v1.6.1 — Trouve l'os 'Head' (ou variantes) dans la hiérarchie du MC.
+        // Cache compatible avec re-spawn de scène — appelé à chaque tick mais
+        // GetComponentsInChildren reste rapide pour ~50 transforms.
+        // Noms candidats : "Head" (Mixamo / Unity Humanoid), "head", "HeadCC",
+        // "mixamorig:Head", "Bip01 Head", "Player Head", etc.
+        private static readonly string[] HeadBoneNames =
+        {
+            "Head", "head", "HeadCC", "Head_M", "HeadBone",
+            "mixamorig:Head", "mixamorig:head",
+            "Bip01 Head", "Bip01_Head",
+            "Player Head", "PlayerHead",
+        };
+        private static Transform ResolveHeadBone(GameObject root)
+        {
+            if (root == null) return null;
+            try
+            {
+                var transforms = root.transform.GetComponentsInChildrenSafe<Transform>(true);
+                // 1) Match exact (case-sensitive sur noms communs)
+                foreach (var t in transforms)
+                {
+                    if (t == null) continue;
+                    string n = null;
+                    try { n = t.gameObject.name; } catch { }
+                    if (string.IsNullOrEmpty(n)) continue;
+                    foreach (var cand in HeadBoneNames)
+                    {
+                        if (n == cand) return t;
+                    }
+                }
+                // 2) Match approximatif : contient "head" (en lowercase)
+                foreach (var t in transforms)
+                {
+                    if (t == null) continue;
+                    string n = null;
+                    try { n = t.gameObject.name; } catch { }
+                    if (string.IsNullOrEmpty(n)) continue;
+                    var lo = n.ToLowerInvariant();
+                    // évite "headphones", "headset", "headpiece"
+                    if ((lo == "head" || lo.EndsWith(":head") || lo.EndsWith("_head") || lo.EndsWith(" head"))
+                        && !lo.Contains("phone") && !lo.Contains("set"))
+                        return t;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        // v1.6.0 — Résolution robuste de l'Animator 'Person' (controller MiSide
+        // complet). Le MC MiSide a typiquement 2 Animators : 'Player Arms' (FPS
+        // arms, controller souvent vide) et 'Person' (body 3rd-person, controller
+        // MiSide). On ne veut que le second.
+        private static Animator ResolvePersonAnimator(MonoBehaviour localAvatar)
+        {
+            // 1) Match direct via Find("Person")
+            try
+            {
+                var personT = localAvatar.transform.Find("Person")
+                              ?? localAvatar.transform.parent?.Find("Person");
+                if (personT != null)
+                {
+                    var a = personT.GetComponent<Animator>();
+                    if (a != null) return a;
+                }
+            }
+            catch { }
+
+            // 2) Scanne tous les Animators et garde celui qui a au moins
+            //    1 paramètre (= controller fonctionnel).
+            //
+            //    v1.6.9 — FIX CRITIQUE : on n'utilise PLUS `runtimeAnimatorController`
+            //    comme critère de filtrage. En IL2CPP MiSide cet accesseur retourne
+            //    `null` même sur un Animator parfaitement valide (property strippée
+            //    — cf. log v1.6.7/v1.6.8 : "controller='', params=15"). Le filtre
+            //    `hasCtrl && pc > 0` faisait passer le sender host sur un Animator
+            //    accessoire (Player Arms / Smartphone) ou en fallback nu au lieu
+            //    de l'Animator 'Person' porteur du blend tree de mouvement.
+            //    Critère robuste : `parameterCount > 0` uniquement
+            //    (idem RealMcCloner.PickBestAnimatorForEnum et PlayerAvatar.ResolveBestAnimator).
+            try
+            {
+                var all = localAvatar.GetComponentsInChildrenSafe<Animator>(true);
+                Animator best = null;
+                foreach (var a in all)
+                {
+                    if (a == null) continue;
+                    int pc = 0;
+                    try { pc = a.parameterCount; } catch { }
+                    if (pc <= 0) continue;
+
+                    // Préfère explicitement celui sur un GO 'Person*'.
+                    var goName = string.Empty;
+                    try { goName = a.gameObject.name; } catch { }
+                    if (goName != null && goName.StartsWith("Person"))
+                        return a;
+                    if (best == null) best = a;
+                }
+                if (best != null) return best;
+            }
+            catch { }
+
+            // 3) Dernier recours : n'importe quel Animator.
+            try
+            {
+                return localAvatar.GetComponent<Animator>()
+                       ?? localAvatar.GetComponentInChildrenSafe<Animator>();
+            }
+            catch { return null; }
+        }
+
+        // ── Handlers de connexion ────────────────────────────────────────────
+        private void OnRemotePeerConnected()
+        {
+            MiSideCoopPlugin.Logger.LogInfo("[Co-op] Remote peer connected.");
+            if (_isHost) SpawnPlayer2Remote();
+        }
+
+        private void OnRemotePeerDisconnected()
+        {
+            // v1.5.1 — Logging détaillé pour diagnostiquer pourquoi le peer
+            // se déconnecte juste après le spawn du clone 3D.
+            MiSideCoopPlugin.Logger.LogWarning(
+                "[Co-op] === REMOTE PEER DISCONNECTED ===");
+            MiSideCoopPlugin.Logger.LogWarning(
+                $"[Co-op] State at disconnect: isHost={_isHost}, isClient={_isClient}, "
+              + $"player1={(_player1 != null ? "alive" : "null")}, "
+              + $"player2={(_player2 != null ? "alive" : "null")}, "
+              + $"player1Synthetic={_player1IsSynthetic}, player2Synthetic={_player2IsSynthetic}, "
+              + $"connectedPlayer='{ConnectedPlayerName}'.");
+            try
+            {
+                MiSideCoopPlugin.Logger.LogWarning(
+                    $"[Co-op] Active scene at disconnect: '{UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}'.");
+            }
+            catch { }
+
+            DestroyRemoteAvatars();
+            ConnectedPlayerName = "...";
+        }
+
+        private void OnConnectedToHost()
+        {
+            MiSideCoopPlugin.Logger.LogInfo("[Co-op] Connected to host.");
+            _tx.Send(new RoomJoinMessage
+            {
+                PlayerName = MiSideCoopPlugin.LocalPlayerName.Value,
+                PlayerRole = 2
+            });
+            SpawnPlayer2Local();
+            SpawnPlayer1Remote();
+        }
+
+        private void OnRelayConnectionError(string error)
+        {
+            MiSideCoopPlugin.Logger.LogError($"[Co-op] Relay error: {error}");
+            _isHost = false;
+            _isClient = false;
+            RoomCode = null;
+        }
+
+        // ── Handlers de messages applicatifs ─────────────────────────────────
+        private void OnPlayerState(PlayerStateMessage msg)
+        {
+            // L'avatar distant correspond au rôle opposé du local
+            if (_isHost) _player2?.ApplyRemoteState(msg);
+            else         _player1?.ApplyRemoteState(msg);
+
+            // v1.6.6 — Si on est en mode VIEWER (shared POV), on pipe la position
+            // tête du holder vers la caméra spectateur.
+            var spov = SharedPovController.Instance;
+            if (spov != null && spov.IsActive && spov.IsViewer)
+            {
+                spov.OnRemoteState(msg.Position, msg.Rotation, msg.HeadRotation);
+            }
+        }
+
+        private void OnPlayerAction(PlayerActionMessage msg)
+        {
+            var remoteAvatar = _isHost ? (MonoBehaviour)_player2 : _player1;
+            remoteAvatar?.GetComponent<AvatarAnimatorSync>()?.PlayActionAnimation(msg.ActionType);
+
+            if (msg.ActionType == "PickUp" && !string.IsNullOrEmpty(msg.TargetObjectId))
+            {
+                // v1.6.6 — On NE désactive PLUS l'item local sur réception d'un
+                // PickUp. C'était la cause racine du bug "personne ne voit son
+                // propre téléphone" : quand le peer ramassait le Smartphone, on
+                // recevait PickUp et on faisait SetActive(false) sur NOTRE
+                // Smartphone local. Le mode SharedPov v1.6.6 gère maintenant la
+                // visibilité de la séquence téléphone (caméra spectateur).
+                //
+                // Pour les items non-hand-held (pickup au sol futur), on garde
+                // l'ancien comportement (utile pour faire disparaître l'item du
+                // monde chez le peer).
+                if (!IsHandHeldItemName(msg.TargetObjectId))
+                {
+                    var obj = GameObject.Find(msg.TargetObjectId);
+                    if (obj != null) obj.SetActive(false);
+                }
+            }
+        }
+
+        // v1.6.6 — Miroir local de PickupPatch.IsHandHeldItem (réutilisé dans OnObjectSync).
+        private static bool IsHandHeldItemName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            string lo = name.ToLowerInvariant();
+            return lo.Contains("smartphone") || lo.Contains("phone")
+                || lo.Contains("tetris")     || lo.Contains("gameboy")
+                || lo.Contains("knife")      || lo.Contains("flashlight")
+                || lo.Contains("torch");
+        }
+
+        // ── v1.6.6 — POV partagée (séquence téléphone Mita) ───────────────────
+        //
+        // Reçu par le peer (viewer) quand le holder ramasse/range le téléphone.
+        // Side-effect : on entre/sort du mode shared-POV via SharedPovController.
+        //
+        private void OnSharedPov(SharedPovMessage msg)
+        {
+            var spov = SharedPovController.Instance;
+            if (spov == null)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    "[Co-op] OnSharedPov: SharedPovController.Instance is null — message dropped.");
+                return;
+            }
+
+            if (msg.Enable)
+            {
+                MiSideCoopPlugin.Logger?.LogInfo(
+                    $"[Co-op] SharedPov ENABLE received (owner='{msg.OwnerName}') → entering VIEWER mode.");
+                spov.StartAsViewer(msg.OwnerName);
+            }
+            else
+            {
+                MiSideCoopPlugin.Logger?.LogInfo(
+                    "[Co-op] SharedPov DISABLE received → exiting VIEWER mode.");
+                if (spov.IsActive && spov.IsViewer) spov.Exit();
+            }
+        }
+
+        // ── v1.6.6 — Forward d'input pendant la POV partagée ─────────────────
+        //
+        // Reçu côté holder quand le viewer appuie sur E (ou autre touche supportée).
+        // On délègue à SharedPovController.OnRemoteInput qui simulera l'action
+        // locale (raycast → ObjectInteractive.Click).
+        //
+        private void OnInputForward(InputForwardMessage msg)
+        {
+            var spov = SharedPovController.Instance;
+            if (spov == null)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    "[Co-op] OnInputForward: SharedPovController.Instance is null — message dropped.");
+                return;
+            }
+            spov.OnRemoteInput(msg.KeyName);
+        }
+
+        // v1.6.8 — Réception d'un HandItemMessage : on délègue à HandItemSync
+        // qui applique l'activation sur le path 1ère personne local + sur le
+        // 3rd-person Right item du clone représentant le sender.
+        private void OnHandItem(HandItemMessage msg)
+        {
+            var his = HandItemSync.Instance;
+            if (his == null)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    "[Co-op] OnHandItem: HandItemSync.Instance is null — message dropped.");
+                return;
+            }
+            his.ApplyRemote(msg);
+        }
+
+        private void OnRoomJoin(RoomJoinMessage msg)
+        {
+            ConnectedPlayerName = msg.PlayerName;
+            if (_player2 != null) _player2.Initialize(msg.PlayerName, false);
+            MiSideCoopPlugin.Logger.LogInfo($"[Co-op] Peer identified: {msg.PlayerName}");
+        }
+
+        private void OnSceneChange(SceneChangeMessage msg)
+        {
+            if (_isHost) return; // l'hôte initie, le client suit
+            // v1.4.2 — PIVOT (suite du v1.4.1) :
+            //
+            // Avant v1.4.2, on appelait SceneManager.LoadScene(msg.SceneName)
+            // côté guest pour forcer la scène à matcher celle du host. Mais
+            // ce LoadScene bypass complètement la machine d'état MiSide
+            // (intro, init save state, audio, etc.). MiSide démarre Scene 1
+            // sans les données dont ses scripts ont besoin → NullReferenceException
+            // pendant le load → kill de la pump TCP → guest disconnect.
+            //
+            // Dans l'architecture co-présence visuelle (v1.4.1), forcer le
+            // scene sync n'a plus de sens : chaque joueur joue MiSide
+            // normalement sur sa machine. Quand les deux sont naturellement
+            // dans la même scène, les fantômes s'affichent. Sinon, ils ne
+            // se voient pas (cohérent).
+            //
+            // → On garde le LOG informationnel (utile pour debug et pour que
+            //   l'utilisateur sache où en est le peer), mais on n'appelle
+            //   plus SceneManager.LoadScene.
+            MiSideCoopPlugin.Logger.LogInfo(
+                $"[Co-op] Peer is now in scene '{msg.SceneName}' (we stay in our own scene).");
+        }
+
+        private void OnCutscene(CutsceneMessage msg)
+            => GameStateSync.Instance?.TriggerCutscene(msg.CutsceneId, msg.Start);
+
+        private void OnObjectSync(ObjectSyncMessage msg)
+        {
+            // v1.6.6 — Filtre les items main : on ne veut plus désactiver un
+            // smartphone/téléphone/etc. côté peer (bug racine résolu, cf. PickupPatch).
+            if (IsHandHeldItemName(msg.ObjectId))
+            {
+                MiSideCoopPlugin.Logger?.LogDebug(
+                    $"[Co-op] OnObjectSync ignored for hand-held item '{msg.ObjectId}' (handled by SharedPov).");
+                return;
+            }
+
+            var obj = GameObject.Find(msg.ObjectId);
+            if (obj == null) return;
+            obj.SetActive(msg.IsActive);
+            if (msg.IsActive) obj.transform.position = msg.Position;
+        }
+
+        // ── v1.5.0 — Lancement synchronisé "Nouvelle Partie" ─────────────────
+        private void OnGameLaunch(GameLaunchMessage msg)
+        {
+            if (_isHost) return; // l'hôte initie, on n'echo pas chez soi
+            MiSideCoopPlugin.Logger.LogInfo(
+                "[Co-op] Host pressed DÉMARRER — invoking 'Nouvelle Partie' on guest.");
+            bool ok = MiSideCoop.UI.MenuButtonClicker.ClickNewGame();
+            if (!ok)
+            {
+                MiSideCoopPlugin.Logger.LogWarning(
+                    "[Co-op] Could not auto-click 'Nouvelle Partie' on guest "
+                  + "(button not found — probably already in-game or different menu). "
+                  + "The guest can still click Nouvelle Partie manually.");
+            }
+        }
+
+        /// <summary>
+        /// Envoyé par l'hôte uniquement (appelé par le bouton "DÉMARRER" du
+        /// modal co-op). Le guest reçoit GameLaunchMessage et déclenche
+        /// localement le bouton "Nouvelle Partie" du menu MiSide.
+        /// </summary>
+        public void BroadcastGameLaunch()
+        {
+            if (!_isHost || !IsConnected)
+            {
+                MiSideCoopPlugin.Logger.LogWarning(
+                    "[Co-op] BroadcastGameLaunch ignored — not host or not connected.");
+                return;
+            }
+            _tx.Send(new GameLaunchMessage());
+            MiSideCoopPlugin.Logger.LogInfo("[Co-op] GameLaunch broadcasted to guest.");
+        }
+
+        // ── Gestion des avatars ───────────────────────────────────────────────
+        //
+        // Chaque Spawn est enveloppé pour qu'un échec IL2CPP n'interrompe pas
+        // la séquence de connexion : on log l'erreur et on continue. Sans ça,
+        // un crash dans GetComponent/AddComponent stoppait tout le clic UI.
+        //
+        private bool _player1DeferredLogged;
+        private void SpawnPlayer1Local()
+        {
+            try
+            {
+                var mcGo = FindMCGameObject();
+                if (mcGo == null)
+                {
+                    // ── v1.2.3 FIX MITA ──
+                    // Quand on appuie "Create Room" depuis le menu principal,
+                    // PlayerMove n'existe pas encore (pas en jeu). L'ancienne
+                    // version créait un CreateDefaultHumanoid OU pire, matchait
+                    // Mita via le nom "Person" → Player1Avatar collait sur elle
+                    // et activait sa caméra enfant / interférait avec son anim.
+                    //
+                    // Nouvelle stratégie : pas d'avatar tant qu'on n'est pas en jeu.
+                    // Le spawn sera ré-essayé via Update() à intervalle régulier
+                    // jusqu'à ce qu'une scène avec PlayerMove se charge.
+                    if (!_player1DeferredLogged)
+                    {
+                        _player1DeferredLogged = true;
+                        MiSideCoopPlugin.Logger.LogInfo(
+                            "[Co-op] Host avatar spawn deferred — no MC GameObject yet " +
+                            "(probably still in main menu). Will retry silently on each scene.");
+                    }
+                    return;
+                }
+                _player1DeferredLogged = false; // reset si on a retrouvé le MC
+                // v1.3.6 — Le AddComponent(typeof(T)) introduit en v1.3.5
+                // (System.Type) est STRIPPÉ en IL2CPP MiSide. On utilise
+                // notre helper Il2CppAddComponentHelper.AddComponentSafe<T>
+                // qui tente d'abord AddComponent(Il2CppSystem.Type) via
+                // réflexion (path IL2CPP-safe définitive), puis fallback
+                // sur AddComponent<T>() générique pour les types enregistrés.
+                _player1 = mcGo.GetComponent<Player1Avatar>()
+                        ?? mcGo.AddComponentSafe<Player1Avatar>();
+                if (_player1 == null)
+                {
+                    MiSideCoopPlugin.Logger.LogError(
+                        "[Co-op] SpawnPlayer1Local: Player1Avatar component creation returned null.");
+                    return;
+                }
+                _player1.Initialize(MiSideCoopPlugin.LocalPlayerName.Value, true);
+                MiSideCoopPlugin.Logger.LogInfo(
+                    $"[Co-op] Host avatar (Player1) initialized on '{mcGo.name}'.");
+            }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger.LogError($"[Co-op] SpawnPlayer1Local failed: {ex.Message}");
+            }
+        }
+
+        private void SpawnPlayer2Remote()
+        {
+            try
+            {
+                // v1.4.9 — On ne spawn QUE si le MC local est dispo (clone 3D possible).
+                // Si pas dispo (host encore au menu principal), on diffère le spawn ;
+                // le retry-spawn (toutes les 2s) re-tentera quand le MC apparaîtra.
+                // Avantage : aucune capsule bleue ne s'affiche dans le menu.
+                var cloned = MiSideCoop.Avatars.RealMcCloner.CloneLocalMc("Player2_Guest");
+                if (cloned == null)
+                {
+                    MiSideCoopPlugin.Logger.LogInfo(
+                        "[Co-op] SpawnPlayer2Remote deferred — MC not yet in scene "
+                      + "(host probably still in main menu). Retry-spawn will recheck every 2s.");
+                    _player2IsSynthetic = true; // marqueur pour que retry-spawn re-tente
+                    return;
+                }
+                _player2IsSynthetic = false;
+                _player2 = cloned.AddComponentSafe<Player2Avatar>();
+                if (_player2 == null)
+                {
+                    MiSideCoopPlugin.Logger.LogError(
+                        "[Co-op] SpawnPlayer2Remote: Player2Avatar component creation returned null.");
+                    return;
+                }
+                _player2.Initialize(ConnectedPlayerName, false);
+                // Clone 3D = textures MiSide originales préservées (pas de ApplySkinColor).
+                MiSideCoopPlugin.Logger.LogInfo(
+                    "[Co-op] Guest avatar (Player2) spawned on host (3D clone).");
+            }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger.LogError($"[Co-op] SpawnPlayer2Remote failed: {ex.Message}");
+            }
+        }
+
+        private bool _player2LocalDeferredLogged;
+        private void SpawnPlayer2Local()
+        {
+            // v1.4.1 — PIVOT ARCHITECTURAL :
+            //
+            // Avant : on créait un GameObject synthétique 'Player2_Self'
+            // (capsule + sphère) qu'on prétendait être le "corps du guest"
+            // avec sa propre caméra MainCamera. Conflit avec la MainCamera du
+            // VRAI MC MiSide qui tournait en parallèle sur la machine du
+            // guest → NRE et écran gris-bleu uni.
+            //
+            // Maintenant : sur la machine du guest, MiSide tourne normalement
+            // avec son MC 'Player' local. On attache Player2Avatar
+            // (isLocal=true) DIRECTEMENT sur ce MC réel. PlayerAvatar.transform
+            // pointe alors sur le transform du MC, donc SendLocalState envoie
+            // automatiquement les coordonnées réelles du joueur au host.
+            //
+            // Côté host, l'avatar visuel du guest reste un humanoïde synthétique
+            // (Player2_Guest, créé par SpawnPlayer2Remote) qui interpolera vers
+            // les positions reçues. Symétrique à ce que SpawnPlayer1Local /
+            // SpawnPlayer1Remote font pour le host.
+            try
+            {
+                if (_player2 != null) return; // déjà attaché
+
+                var mcGo = FindMCGameObject();
+                if (mcGo == null)
+                {
+                    if (!_player2LocalDeferredLogged)
+                    {
+                        _player2LocalDeferredLogged = true;
+                        MiSideCoopPlugin.Logger.LogInfo(
+                            "[Co-op] Guest local avatar spawn deferred — no MC GameObject yet "
+                          + "(probably still in main menu). Will retry silently on each scene.");
+                    }
+                    return;
+                }
+                _player2LocalDeferredLogged = false;
+
+                _player2 = mcGo.GetComponent<Player2Avatar>()
+                        ?? mcGo.AddComponentSafe<Player2Avatar>();
+                if (_player2 == null)
+                {
+                    MiSideCoopPlugin.Logger.LogError(
+                        "[Co-op] SpawnPlayer2Local: Player2Avatar component creation returned null.");
+                    return;
+                }
+                _player2.Initialize(MiSideCoopPlugin.LocalPlayerName.Value, true);
+                MiSideCoopPlugin.Logger.LogInfo(
+                    $"[Co-op] Guest local avatar (Player2) attached on real MC '{mcGo.name}'.");
+            }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger.LogError($"[Co-op] SpawnPlayer2Local failed: {ex.Message}");
+            }
+        }
+
+        private void SpawnPlayer1Remote()
+        {
+            // v1.3.8 — REFONTE :
+            //
+            // En v1.3.7 cette méthode appelait FindMCGameObject() côté guest,
+            // ce qui retournait `Player2_Self` (l'avatar local du guest) parce
+            // que Camera.main est tagguée MainCamera sur Player2Camera → root =
+            // Player2_Self. Conséquence : Player1Avatar (la représentation
+            // distante du host) était attaché sur le PROPRE corps du guest.
+            //
+            // Le concept même était faux : il n'y a PAS de "MC du host" sur la
+            // machine du guest. Le host est sur sa machine. Le guest doit juste
+            // afficher un avatar fantôme synthétique (capsule humanoïde) qui
+            // suit les positions reçues du réseau — exactement comme on fait
+            // pour Player2 côté host (SpawnPlayer2Remote).
+            //
+            // → On crée un CreateDefaultHumanoid dédié, plus aucun FindMC.
+            try
+            {
+                if (_player1 != null) return; // déjà spawné
+
+                // v1.4.9 — Spawn différé tant que le MC local n'est pas dispo
+                // (pas de capsule bleue dans le menu).
+                var cloned = MiSideCoop.Avatars.RealMcCloner.CloneLocalMc("Player1_Host_Remote");
+                if (cloned == null)
+                {
+                    MiSideCoopPlugin.Logger.LogInfo(
+                        "[Co-op] SpawnPlayer1Remote deferred — MC not yet in scene. "
+                      + "Retry-spawn will recheck every 2s.");
+                    _player1IsSynthetic = true;
+                    return;
+                }
+                _player1IsSynthetic = false;
+                _player1 = cloned.AddComponentSafe<Player1Avatar>();
+                if (_player1 == null)
+                {
+                    MiSideCoopPlugin.Logger.LogError(
+                        "[Co-op] SpawnPlayer1Remote: Player1Avatar component creation returned null.");
+                    return;
+                }
+                _player1.Initialize("Host", false);
+                MiSideCoopPlugin.Logger.LogInfo(
+                    "[Co-op] Remote Player1 (host ghost) spawned as 3D MC clone.");
+            }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger.LogError($"[Co-op] SpawnPlayer1Remote failed: {ex.Message}");
+            }
+        }
+
+        // v1.4.5 — UPGRADE SYNTHETIC → 3D CLONE
+        //
+        // Quand un avatar distant a été créé en mode fallback (capsule + sphère)
+        // parce que le MC local n'était pas encore en scène (typiquement quand
+        // l'host crée la room depuis le menu principal), on re-tente le clone
+        // 3D toutes les 2s via la boucle retry-spawn. Dès que le MC apparaît,
+        // on Destroy la capsule et on la remplace par un vrai clone 3D.
+        //
+        // Note : pour les avatars LOCAUX (Player1 côté host, Player2 côté guest),
+        // pas besoin d'upgrade — ils sont attachés directement sur le MC réel.
+        private void TryUpgradePlayer2ToClone()
+        {
+            // Pre-flight : MC local disponible ?
+            var mc = MiSideCoop.Avatars.SceneDiagnostics.FindMcHeuristic();
+            if (mc == null) return; // pas encore, on réessaiera au prochain tick
+
+            try
+            {
+                var newClone = MiSideCoop.Avatars.RealMcCloner.CloneLocalMc("Player2_Guest");
+                if (newClone == null) return; // Instantiate raté, reste synthétique
+
+                // Préserve la dernière position interpolée pour éviter un teleport.
+                Vector3 lastPos = _player2.transform.position;
+                Quaternion lastRot = _player2.transform.rotation;
+
+                Destroy(_player2.gameObject);
+                _player2 = null;
+
+                newClone.transform.position = lastPos;
+                newClone.transform.rotation = lastRot;
+                _player2 = newClone.AddComponentSafe<Player2Avatar>();
+                if (_player2 == null)
+                {
+                    MiSideCoopPlugin.Logger.LogError(
+                        "[Co-op] TryUpgradePlayer2ToClone: AddComponent failed on cloned MC.");
+                    _player2IsSynthetic = true;
+                    return;
+                }
+                _player2.Initialize(ConnectedPlayerName, false);
+                // v1.4.8 — Clone 3D = pas de recolorage (textures originales).
+                _player2IsSynthetic = false;
+                MiSideCoopPlugin.Logger.LogInfo(
+                    "[Co-op] Player2 upgraded synthetic → 3D MC clone (peer now visible as real character).");
+            }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger.LogError(
+                    $"[Co-op] TryUpgradePlayer2ToClone failed: {ex.Message}");
+            }
+        }
+
+        private void TryUpgradePlayer1ToClone()
+        {
+            var mc = MiSideCoop.Avatars.SceneDiagnostics.FindMcHeuristic();
+            if (mc == null) return;
+
+            try
+            {
+                var newClone = MiSideCoop.Avatars.RealMcCloner.CloneLocalMc("Player1_Host_Remote");
+                if (newClone == null) return;
+
+                Vector3 lastPos = _player1.transform.position;
+                Quaternion lastRot = _player1.transform.rotation;
+                Destroy(_player1.gameObject);
+                _player1 = null;
+
+                newClone.transform.position = lastPos;
+                newClone.transform.rotation = lastRot;
+                _player1 = newClone.AddComponentSafe<Player1Avatar>();
+                if (_player1 == null)
+                {
+                    MiSideCoopPlugin.Logger.LogError(
+                        "[Co-op] TryUpgradePlayer1ToClone: AddComponent failed on cloned MC.");
+                    _player1IsSynthetic = true;
+                    return;
+                }
+                _player1.Initialize("Host", false);
+                _player1IsSynthetic = false;
+                MiSideCoopPlugin.Logger.LogInfo(
+                    "[Co-op] Player1 upgraded synthetic → 3D MC clone (peer now visible as real character).");
+            }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger.LogError(
+                    $"[Co-op] TryUpgradePlayer1ToClone failed: {ex.Message}");
+            }
+        }
+
+
+        private void DestroyRemoteAvatars()
+        {
+            if (_player2 != null && !_player2.IsLocalPlayer)
+            {
+                Destroy(_player2.gameObject); _player2 = null;
+            }
+            if (_player1 != null && !_player1.IsLocalPlayer)
+            {
+                Destroy(_player1.gameObject); _player1 = null;
+            }
+        }
+
+        // ── Helpers ───────────────────────────────────────────────────────────
+        //
+        // IL2CPP MiSide : Object.FindObjectOfType(Type), FindObjectsOfType(...) et
+        // toutes les API génériques de recherche sont strippées. On utilise
+        // uniquement GameObject.Find(string) qui est prouvé fonctionnel par les
+        // logs (GameStateSync.OnSceneChanged appelle GameObject.Find("SpawnPoint")
+        // avec succès).
+        //
+        // Chaque appel est isolé dans sa propre sous-méthode pour éviter qu'une
+        // éventuelle API strippée fasse échouer la JIT-compilation de toute la
+        // méthode parente.
+        //
+        private static GameObject FindMCGameObject()
+        {
+            // v1.3.7 — Délégation à SceneDiagnostics.FindMcHeuristic qui :
+            //   1) Essaie une liste élargie de noms candidats (incluant les
+            //      variantes 0.93L : Mita_MC, Player_MC, MC_Player, Character...).
+            //   2) Heuristique sous Camera.main.transform.root : descendant
+            //      avec Rigidbody/CharacterController + Animator, nom non-Mita.
+            //   3) Fallback : Camera.main.transform.root (comportement v1.3.6).
+            //
+            // L'utilisateur peut appuyer sur F9 en jeu pour dumper l'arbre complet
+            // de la scène (cf. CoopBootstrap) → on identifie le vrai nom MC en
+            // 0.93L et on l'ajoute à la liste de candidats sans Cpp2IL.
+            return MiSideCoop.Avatars.SceneDiagnostics.FindMcHeuristic();
+        }
+
+        /// <summary>
+        /// Filtre les noms de GameObjects typiques des écrans menu/UI/cinématiques
+        /// pour éviter de prendre Mita ou un Canvas pour le MC.
+        /// </summary>
+        private static bool IsMenuRootName(string n)
+        {
+            if (string.IsNullOrEmpty(n)) return true;
+            var lo = n.ToLowerInvariant();
+            return lo.Contains("menu")  || lo.Contains("ui")      ||
+                   lo.Contains("canvas")|| lo.Contains("mita")    ||
+                   lo.Contains("splash")|| lo.Contains("title")   ||
+                   lo.Contains("intro") || lo.Contains("cutscene")||
+                   lo.Contains("person"); // safety net : "Person" (Mita au menu)
+        }
+
+        private static GameObject SafeGameObjectFind(string name)
+        {
+            try { return GameObject.Find(name); }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning($"[Co-op] GameObject.Find('{name}'): {ex.Message}");
+                return null;
+            }
+        }
+
+        private static GameObject SafeFindWithTag(string tag)
+        {
+            try { return GameObject.FindWithTag(tag); }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning($"[Co-op] FindWithTag('{tag}'): {ex.Message}");
+                return null;
+            }
+        }
+
+        private static GameObject CreateDefaultHumanoid(string goName)
+        {
+            var root = new GameObject(goName);
+
+            var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            body.transform.SetParent(root.transform);
+            body.transform.localPosition = new Vector3(0, 1f, 0);
+            body.transform.localScale    = new Vector3(0.4f, 0.9f, 0.4f);
+            UnityEngine.Object.Destroy(body.GetComponent<CapsuleCollider>());
+
+            var head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            head.transform.SetParent(root.transform);
+            head.transform.localPosition = new Vector3(0, 2.1f, 0);
+            head.transform.localScale    = Vector3.one * 0.35f;
+            UnityEngine.Object.Destroy(head.GetComponent<SphereCollider>());
+
+            var col = root.AddComponent<CapsuleCollider>();
+            col.height    = 2f;
+            col.center    = new Vector3(0, 1f, 0);
+            col.isTrigger = true;
+
+            // v1.3.9 — Marquer DontDestroyOnLoad pour que l'avatar survive
+            // aux changements de scène. Sans ça, MiSide détruit notre
+            // GameObject à chaque transition (SceneLoading → Scene 1 - ...),
+            // ce qui :
+            //   1) cassait les références cachées (NRE côté guest)
+            //   2) forçait un respawn toutes les ~2s via retry-spawn
+            //      (log spam "Guest avatar (Player2) spawned on host." en
+            //       boucle, surtout après un disconnect non nettoyé)
+            //   3) faisait disparaître visuellement l'avatar pendant les
+            //      transitions de scène.
+            // L'objet doit être à la racine (sans parent) pour que Unity
+            // accepte DontDestroyOnLoad — c'est le cas par construction ici.
+            try { UnityEngine.Object.DontDestroyOnLoad(root); }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    $"[Co-op] CreateDefaultHumanoid DontDestroyOnLoad: {ex.Message}");
+            }
+
+            return root;
+        }
+
+        private static string SampleAnimatorState(Animator anim)
+        {
+            if (anim == null) return "Idle";
+            var info = anim.GetCurrentAnimatorStateInfo(0);
+            if (info.IsName("Walk")    || info.IsName("Walking"))   return "Walk";
+            if (info.IsName("Run")     || info.IsName("Running"))   return "Run";
+            if (info.IsName("Crouch")  || info.IsName("Crouching")) return "Crouch";
+            if (info.IsName("Interact"))                             return "Interact";
+            if (info.IsName("PickUp")  || info.IsName("Pickup"))    return "PickUp";
+            if (info.IsName("OpenDoor"))                             return "OpenDoor";
+            if (info.IsName("Die")     || info.IsName("Death"))     return "Die";
+            return "Idle";
+        }
+
+        private static float SampleAnimatorSpeed(Animator anim)
+        {
+            if (anim == null) return 0f;
+            // v1.6.0 — En MiSide, les vrais params sont 'Forward' et 'Right'.
+            // Magnitude = sqrt(f² + r²) → vraie vitesse.
+            try
+            {
+                float f = 0f, r = 0f;
+                try { f = anim.GetFloat("Forward"); } catch { }
+                try { r = anim.GetFloat("Right");   } catch { }
+                if (f != 0f || r != 0f)
+                    return Mathf.Sqrt(f * f + r * r);
+            }
+            catch { }
+            string[] candidates = { "Speed", "MoveSpeed", "Velocity", "BlendSpeed" };
+            foreach (var c in candidates)
+            {
+                try { return anim.GetFloat(c); } catch { }
+            }
+            return 0f;
+        }
+    }
+}

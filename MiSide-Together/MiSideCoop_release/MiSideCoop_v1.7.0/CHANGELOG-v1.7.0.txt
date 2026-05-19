@@ -1,0 +1,33 @@
+MiSide Together — v1.7.0
+=========================
+
+🐛 Critical bug fix: IL2CPP animator filter
+--------------------------------------------
+
+In IL2CPP MiSide, the `Animator.runtimeAnimatorController` accessor is
+stripped and returns `null` even on a perfectly valid Animator (cf. logs
+v1.6.7/v1.6.8: "controller='', params=15"). The filter `hasCtrl && pc > 0`
+was therefore excluding ALL Animators and falling back to "first Animator
+regardless of state" → we picked 'Player Arms' (pc=0, first-person arms)
+instead of 'Person' (pc=15, the real MiSide body Animator).
+
+Consequences before fix:
+  - Remote ghost stayed in T-pose on the client
+  - Spam of ~30 NullReferenceException per tick from Animator.GetParameter(i)
+  - send-diag emitted on the wrong animator → movement blend tree never played
+
+What changed:
+  - PlayerAvatar.ResolveBestAnimator: filters on `parameterCount > 0` only
+  - CoopNetworkManager.ResolvePersonAnimator: same fix
+  - Consistent with RealMcCloner.PickBestAnimatorForEnum (already fixed v1.6.9)
+
+Other improvements:
+  - HandItemSync registered via ClassInjector.RegisterTypeInIl2Cpp<HandItemSync>()
+    → fixes the NullReferenceException on Awake() / AddComponent<HandItemSync>()
+  - SharedPovController registered via ClassInjector.RegisterTypeInIl2Cpp<SharedPovController>()
+  - Documentation comments updated across PlayerAvatar / CoopNetworkManager
+
+Compatibility:
+  - MiSide (current Steam build)
+  - BepInEx 6.0.0-be.725 (IL2CPP)
+  - Unity 2021.3.18
