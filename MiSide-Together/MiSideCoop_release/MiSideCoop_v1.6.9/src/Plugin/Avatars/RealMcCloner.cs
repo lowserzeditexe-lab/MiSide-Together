@@ -246,17 +246,9 @@ namespace MiSideCoop.Avatars
         /// <summary>
         /// v1.6.8 — Sélectionne le meilleur Animator pour l'énumération des
         /// paramètres : priorité aux GO 'Person*' / 'Player2_Guest' / 'Player1_Host_Remote',
-        /// sinon le premier Animator avec parameterCount > 0.
+        /// sinon le premier Animator avec un controller assigné ET parameterCount > 0.
         /// Renvoie null si AUCUN candidat n'est valide → l'appelant skip l'énumération
         /// pour ne pas faire 15 NullReferenceException sur GetParameter(i).
-        ///
-        /// v1.6.9 — IMPORTANT : en IL2CPP MiSide, l'accesseur
-        /// `runtimeAnimatorController` retourne null même quand un controller
-        /// VALIDE est attaché (property stripping). On ne peut donc PAS s'en
-        /// servir comme critère de filtrage. À la place on regarde
-        /// `parameterCount > 0` qui, lui, marche dans IL2CPP MiSide.
-        /// Pour 'Player Arms' (controller vide réel) parameterCount = 0
-        /// donc il est exclu naturellement.
         /// </summary>
         private static Animator PickBestAnimatorForEnum(Animator[] all)
         {
@@ -265,9 +257,11 @@ namespace MiSideCoop.Avatars
             foreach (var a in all)
             {
                 if (a == null) continue;
-                int pc = 0;
-                try { pc = a.parameterCount; } catch { }
-                if (pc <= 0) continue;
+                bool hasCtrl = false;
+                int  pc      = 0;
+                try { hasCtrl = a.runtimeAnimatorController != null; } catch { }
+                try { pc      = a.parameterCount; }                    catch { }
+                if (!hasCtrl || pc <= 0) continue;
                 string goName = string.Empty;
                 try { goName = a.gameObject.name; } catch { }
                 if (!string.IsNullOrEmpty(goName) &&
