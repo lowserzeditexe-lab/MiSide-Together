@@ -62,9 +62,16 @@ namespace MiSideCoop.Network
         // essayer sans risque.
 
         // Floats — pilotent les blend trees (idle ↔ walk ↔ run, look around, etc.)
+        //
+        // v1.6.0 — Mis en TÊTE : 'Forward' et 'Right', les VRAIS noms natifs
+        // MiSide capturés par AnimatorDiagPatch (log v1.5.9). C'est ce que
+        // MiSide pousse en local pour piloter le blend tree du body 'Person'
+        // (Idle ↔ Walk ↔ Run). Les autres restent comme fallback.
         private static readonly string[] MiSideFloatParams =
         {
-            "SpeedForward",        // ⭐ LE param principal — pilote le blend tree
+            "Forward",             // ⭐ v1.6.0 — VRAI param principal MiSide (signé -1..+1)
+            "Right",               // ⭐ v1.6.0 — VRAI param latéral MiSide (signé -1..+1)
+            "SpeedForward",        // legacy guess v1.5.7 (gardé en fallback)
             "MouseSpeed",
             "ShooterMouseSpeed",
             "HoldTime",

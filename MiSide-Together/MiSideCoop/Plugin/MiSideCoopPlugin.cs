@@ -30,6 +30,7 @@ namespace MiSideCoop
         public static ConfigEntry<string> UpdateRepo         { get; private set; }
         public static ConfigEntry<string> UpdateSkipVersion  { get; private set; }
         public static ConfigEntry<bool>   UpdateAutoInstall  { get; private set; }
+        public static ConfigEntry<int>    UpdateSteamAppId   { get; private set; }
 
         private Harmony _harmony;
 
@@ -93,6 +94,13 @@ namespace MiSideCoop
                 "v1.5.7+ — Installe automatiquement la mise à jour dès qu'elle est détectée au démarrage, " +
                 "sans afficher de popup. Le jeu se kill et se relance avec BepInEx via run_bepinex.bat (cascade v1.5.5). " +
                 "Si false : affiche une notification non-bloquante en bas à droite avec un bouton INSTALL.");
+
+            UpdateSteamAppId = Config.Bind(
+                "Updates", "SteamAppId", 2527500,
+                "v1.6.3 — AppID Steam du jeu MiSide. Utilisé par l'auto-updater pour relancer le jeu " +
+                "via 'steam://rungameid/<appid>' (méthode prioritaire). Steam respecte alors les " +
+                "Launch Options (ex: 'run_bepinex.bat %command%') et BepInEx est correctement injecté. " +
+                "Ne change que si MiSide a un AppID différent sur ta plateforme.");
 
             // ── Enregistrement des types IL2CPP ───────────────────────────────
             RegisterIl2CppTypes();

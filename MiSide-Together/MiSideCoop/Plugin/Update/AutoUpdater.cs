@@ -49,8 +49,10 @@ namespace MiSideCoop.Update
         private GameObject _acceptBtn;
         private GameObject _skipBtn;
         private GameObject _laterBtn;
+        private GameObject _okBtn; // v1.6.5 — bouton OK du popup post-download
         private bool _promptShown;
         private bool _downloadInProgress;
+        private bool _restartPromptShown; // v1.6.5
         private Text _bodyText;
 
         // ── Style ─────────────────────────────────────────────────────────────
@@ -120,6 +122,16 @@ namespace MiSideCoop.Update
             if (_canvas != null && !_downloadInProgress)
             {
                 HandleButtonClicks();
+            }
+
+            // v1.6.5 — Popup OK : on attend que l'utilisateur clique pour quitter.
+            if (_restartPromptShown && _canvas != null && _okBtn != null)
+            {
+                if (Input.GetMouseButtonDown(0) && IsInRect(_okBtn, (Vector2)Input.mousePosition))
+                {
+                    MiSideCoopPlugin.Logger?.LogInfo("[Co-op] User clicked OK on restart prompt. Quitting.");
+                    try { Application.Quit(); } catch { }
+                }
             }
         }
 
@@ -355,9 +367,82 @@ namespace MiSideCoop.Update
             title.color = BorderClr;
 
             _bodyText = CreateText(panel.gameObject, "InstallingBody",
-                "Downloading update. Game will restart automatically.",
+                "Downloading update. A popup will ask you to restart when done.",
                 11, FontStyle.Normal, TextAnchor.UpperLeft,
                 new Vector2(12f, -32f), new Vector2(330f, 26f));
+        }
+
+        /// <summary>
+        /// v1.6.5 — Popup modale plein écran affichée APRÈS le téléchargement.
+        /// Annonce que la mise à jour est prête, et qu'il faut relancer le jeu
+        /// manuellement. Un bouton OK ferme le jeu. La relance auto a été
+        /// retirée pour fiabilité (cf. bug v1.5.x/v1.6.x : BepInEx non injecté
+        /// quand le jeu était relancé via Start-Process direct).
+        /// </summary>
+        private void BuildRestartPromptUI()
+        {
+            _canvas = new GameObject("MiSideCoopUpdateRestart");
+            _canvas.transform.SetParent(this.transform, false);
+            var canvas = _canvas.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.sortingOrder = 32200; // au-dessus du toast
+            var scaler = _canvas.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920f, 1080f);
+            scaler.matchWidthOrHeight = 0.5f;
+            _canvas.AddComponent<GraphicRaycaster>();
+
+            // Overlay sombre plein écran (bloque les clics et l'attention)
+            var overlay = CreateImage(_canvas, "Overlay", OverlayBg);
+            var orec = overlay.GetComponent<RectTransform>();
+            orec.anchorMin = Vector2.zero; orec.anchorMax = Vector2.one;
+            orec.offsetMin = Vector2.zero; orec.offsetMax = Vector2.zero;
+            overlay.raycastTarget = true;
+
+            // Panel central
+            var panel = CreateImage(_canvas, "Panel", PanelBg);
+            var prec = panel.GetComponent<RectTransform>();
+            prec.anchorMin = new Vector2(0.5f, 0.5f);
+            prec.anchorMax = new Vector2(0.5f, 0.5f);
+            prec.pivot     = new Vector2(0.5f, 0.5f);
+            prec.sizeDelta = new Vector2(620f, 280f);
+            prec.anchoredPosition = Vector2.zero;
+            panel.raycastTarget = true;
+
+            // Bordure pink (ligne supérieure)
+            var border = CreateImage(_canvas, "Border", BorderClr);
+            var brec = border.GetComponent<RectTransform>();
+            brec.anchorMin = new Vector2(0.5f, 0.5f);
+            brec.anchorMax = new Vector2(0.5f, 0.5f);
+            brec.pivot     = new Vector2(0.5f, 0.5f);
+            brec.sizeDelta = new Vector2(624f, 6f);
+            brec.anchoredPosition = new Vector2(0f, 137f);
+
+            // Titre
+            CreateText(panel.gameObject, "RestartTitle",
+                $"MISE À JOUR PRÊTE  ·  v{_remoteVersion}",
+                22, FontStyle.Bold, TextAnchor.UpperCenter,
+                new Vector2(0f, -24f), new Vector2(580f, 36f));
+
+            // Body
+            _bodyText = CreateText(panel.gameObject, "RestartBody",
+                "La nouvelle version a été téléchargée.\n\n" +
+                "Cliquez OK pour fermer le jeu.\n" +
+                "Relancez ensuite MiSide manuellement — la mise à jour\n" +
+                "sera appliquée à la fermeture, et BepInEx s'injectera\n" +
+                "correctement au prochain démarrage.",
+                15, FontStyle.Normal, TextAnchor.UpperCenter,
+                new Vector2(0f, -68f), new Vector2(560f, 140f));
+
+            // Bouton OK (centré, accent)
+            _okBtn = CreateButton(panel.gameObject, "BtnOK", "OK — FERMER LE JEU",
+                new Vector2(0f, -218f), new Vector2(260f, 48f), BtnAccept, Color.white);
+
+            // Reset des autres boutons pour que HandleButtonClicks ne s'y trompe pas.
+            _acceptBtn = null;
+            _skipBtn   = null;
+            _laterBtn  = null;
+            _restartPromptShown = true;
         }
 
 
@@ -460,7 +545,7 @@ namespace MiSideCoop.Update
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // Étape 3 — Download + script PowerShell + Application.Quit
+        // Étape 3 — Download + script PowerShell + Popup OK
         // ─────────────────────────────────────────────────────────────────────
         [HideFromIl2Cpp]
         private IEnumerator DownloadAndApplyRoutine()
@@ -499,13 +584,8 @@ namespace MiSideCoop.Update
             }
 
             // 2) Détermine les chemins du jeu via des helpers ISOLÉS.
-            //    En IL2CPP MiSide, Process.GetCurrentProcess().MainModule peut
-            //    être strippé et le JIT échoue AVANT le try/catch englobant
-            //    (cf. fix v1.2.x sur SetPixels32). Chaque appel risqué doit
-            //    donc être dans sa propre méthode pour que la défaillance JIT
-            //    reste confinée et soit récupérable.
-            var gameRoot = ResolveGameRoot();          // priorité : Application.dataPath
-            var gameExe  = ResolveGameExePath(gameRoot); // priorité : scan *.exe
+            var gameRoot = ResolveGameRoot();
+            var gameExe  = ResolveGameExePath(gameRoot);
             int pid      = TryGetCurrentPid();
 
             if (string.IsNullOrEmpty(gameRoot) || string.IsNullOrEmpty(gameExe))
@@ -537,11 +617,23 @@ namespace MiSideCoop.Update
                 yield break;
             }
 
-            // 3) Quitte proprement le jeu pour que le script puisse remplacer les fichiers
+            // 3) v1.6.5 — POPUP "OK pour fermer". Plus de relance auto.
+            // Le user clique OK → Application.Quit → script PS extrait → Windows
+            // MessageBox demande à l'user de relancer manuellement.
             MiSideCoopPlugin.Logger?.LogInfo(
-                "[Co-op] Update staged. Quitting game so updater can replace files...");
-            yield return null;
-            try { Application.Quit(); } catch { /* will be force-killed by script */ }
+                "[Co-op] Update downloaded. Showing OK-to-quit popup (user must relaunch manually).");
+            try
+            {
+                if (_canvas != null) { Destroy(_canvas); _canvas = null; }
+                BuildRestartPromptUI();
+            }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    $"[Co-op] BuildRestartPromptUI failed: {ex.Message}. Quitting directly.");
+                try { Application.Quit(); } catch { }
+            }
+            _downloadInProgress = false;
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -616,6 +708,9 @@ namespace MiSideCoop.Update
         {
             try
             {
+                int steamAppId = 2527500;
+                try { steamAppId = MiSideCoopPlugin.UpdateSteamAppId?.Value ?? 2527500; } catch { }
+
                 var psi = new ProcessStartInfo
                 {
                     FileName = "powershell.exe",
@@ -623,7 +718,8 @@ namespace MiSideCoop.Update
                                 $"-GamePid {pid} " +
                                 $"-ZipPath \"{zipPath}\" " +
                                 $"-GameRoot \"{gameRoot}\" " +
-                                $"-GameExe \"{gameExe}\"",
+                                $"-GameExe \"{gameExe}\" " +
+                                $"-SteamAppId {steamAppId}",
                     UseShellExecute = true,
                     CreateNoWindow = true,
                     WindowStyle = ProcessWindowStyle.Hidden,
@@ -670,9 +766,27 @@ param(
     [int]   $GamePid,
     [string]$ZipPath,
     [string]$GameRoot,
-    [string]$GameExe
+    [string]$GameExe,
+    [int]   $SteamAppId = 2527500
 )
 $ErrorActionPreference = 'SilentlyContinue'
+
+# v1.6.5 — UPDATE SCRIPT SIMPLIFIÉ
+#
+# Plus de cascade de relance (Steam URL, run_bepinex.bat, doorstop env vars).
+# La relance auto causait régulièrement des bugs (BepInEx non injecté →
+# jeu vanilla, ou Start-Process avec DLL search order incorrect).
+#
+# Nouveau flow :
+#   1) Attendre que le jeu se ferme (l'user a cliqué OK dans la popup in-game)
+#   2) Nettoyer les anciens fichiers de plugin
+#   3) Décompresser le zip à la racine du jeu
+#   4) Afficher une Windows MessageBox demandant à l'user de relancer manuellement
+#   5) Exit
+#
+# Avantage : 100% fiable. La relance manuelle par l'utilisateur garantit
+# l'injection BepInEx correcte via la méthode habituelle (Steam launch,
+# raccourci bureau, run_bepinex.bat, etc.).
 
 # 1) Attendre que le jeu se ferme (max 60s)
 $timeout = 60
@@ -682,19 +796,15 @@ while (Get-Process -Id $GamePid -ErrorAction SilentlyContinue) {
     if ($timeout -le 0) { break }
 }
 
-# 2) Petit délai pour libérer les locks Windows
+# Petit délai pour libérer les locks Windows.
 Start-Sleep -Milliseconds 1500
 
-# 3) v1.3.4/v1.3.5 — Nettoyage des doublons DLL hérités des templates v1.0+
-#    et de toute copie versionnée laissée par d'anciens updaters.
+# 2) Nettoyage des doublons DLL hérités.
 $pluginsDir = Join-Path $GameRoot 'BepInEx\plugins'
 $staleDir   = Join-Path $pluginsDir 'MiSideCoop'
 if (Test-Path $staleDir) {
     try { Remove-Item -Recurse -Force $staleDir -ErrorAction SilentlyContinue } catch { }
 }
-
-# 3b) v1.3.5 — Supprime aussi toute autre copie 'MiSideCoop*.dll' dans plugins/
-#    sauf le fichier canonique 'MiSideCoop.dll'.
 if (Test-Path $pluginsDir) {
     try {
         Get-ChildItem -Path $pluginsDir -Filter 'MiSideCoop*' -Force -ErrorAction SilentlyContinue |
@@ -703,25 +813,26 @@ if (Test-Path $pluginsDir) {
     } catch { }
 }
 
-# 4) Décompresse le zip directement à la racine du jeu (-Force = overwrite)
+# 3) Décompresse le zip à la racine du jeu (-Force = overwrite).
+$extractOk = $false
 try {
     Expand-Archive -Path $ZipPath -DestinationPath $GameRoot -Force
+    $extractOk = $true
 } catch {
-    [System.Windows.Forms.MessageBox]::Show(
-        ""MiSide Together update failed to extract:`n$($_.Exception.Message)`n`nYou can extract '$ZipPath' manually."",
-        ""MiSide Together"") | Out-Null
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        [System.Windows.Forms.MessageBox]::Show(
+            ""MiSide Together : echec de l'extraction de la mise a jour.`n`n$($_.Exception.Message)`n`nTu peux extraire manuellement le fichier :`n$ZipPath`nvers le dossier du jeu :`n$GameRoot"",
+            ""MiSide Together — Erreur d'extraction"") | Out-Null
+    } catch { }
     exit 1
 }
 
-# 4b) v1.5.5 — DÉFENSE EN PROFONDEUR : certains ZIPs anciens (v1.5.4 release
-#     d'origine) contiennent un wrapper folder 'MiSideCoop_vX.Y.Z/'. Après
-#     extraction, le DLL n'est PAS au bon endroit. On détecte cette structure
-#     et on aplatit en copiant tout vers GameRoot.
+# 3b) Défense en profondeur : applatir les wrappers MiSideCoop_vX.Y.Z/.
 try {
     $wrappers = Get-ChildItem -Path $GameRoot -Directory -Filter 'MiSideCoop_v*' -ErrorAction SilentlyContinue
     foreach ($w in $wrappers) {
         $inner = $w.FullName
-        # Copie récursive du contenu du wrapper vers GameRoot, en écrasant.
         try {
             Get-ChildItem -Path $inner -Force -ErrorAction SilentlyContinue | ForEach-Object {
                 $dest = Join-Path $GameRoot $_.Name
@@ -736,75 +847,31 @@ try {
     }
 } catch { }
 
-# 5) v1.3.4 — Si le zip réintroduisait par erreur le sous-dossier doublon,
-#    on le re-supprime APRÈS extraction (idempotent, safe).
+# Re-nettoyer le sous-dossier doublon (idempotent).
 if (Test-Path $staleDir) {
     try { Remove-Item -Recurse -Force $staleDir -ErrorAction SilentlyContinue } catch { }
 }
 
-# 6) Supprime le zip temporaire
+# 4) Supprime le zip temporaire.
 Remove-Item -Force $ZipPath -ErrorAction SilentlyContinue
 
-# 7) v1.5.5 — RELANCE INTELLIGENTE DU JEU
-#
-# Bug v1.0–v1.5.4 : Start-Process -FilePath $GameExe lance MiSide.exe
-# directement, ce qui CONTOURNE les Steam Launch Options. Si l'utilisateur
-# a configuré 'run_bepinex.bat %command%' (méthode officielle BepInEx 6
-# IL2CPP pour Steam Proton/Linux ET pour de nombreuses configs Windows),
-# BepInEx n'est PAS injecté → le jeu redémarre vanilla, sans le mod.
-#
-# Stratégie v1.5.5 (cascade par ordre de fiabilité) :
-#   A) Si 'run_bepinex.bat' existe à la racine → on le lance (config Steam
-#      Proton-style). BepInEx s'injecte via les variables d'env qu'il définit.
-#   B) Sinon, si 'winhttp.dll' (proxy doorstop) existe à la racine ET que
-#      'doorstop_config.ini' aussi → l'auto-injection Windows fonctionne,
-#      on peut lancer MiSide.exe directement.
-#   C) Sinon, fallback : tenter via Steam URL si l'AppID est connu (MiSide
-#      = 2527670). Steam respectera les Launch Options définies.
-#   D) Dernier recours : lancer MiSide.exe brut + afficher un avertissement
-#      au user.
-$bepinexBat   = Join-Path $GameRoot 'run_bepinex.bat'
-$winhttpDll   = Join-Path $GameRoot 'winhttp.dll'
-$doorstopIni  = Join-Path $GameRoot 'doorstop_config.ini'
-$doorstopNew  = Join-Path $GameRoot '.doorstop_version'   # BepInEx 6 nouveau format
-$launched     = $false
+# 5) Windows MessageBox : informe l'user que la mise a jour est faite et
+#    qu'il doit relancer le jeu manuellement.
+try {
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    [System.Windows.Forms.MessageBox]::Show(
+        ""MiSide Together a ete mis a jour avec succes.`n`nRelance MiSide manuellement (Steam, raccourci, ou run_bepinex.bat).`nBepInEx sera correctement injecte au prochain demarrage."",
+        ""MiSide Together — Mise a jour terminee"") | Out-Null
+} catch { }
 
-# A) run_bepinex.bat (méthode la plus fiable et explicite)
-if (-not $launched -and (Test-Path $bepinexBat)) {
-    try {
-        Start-Process -FilePath $bepinexBat -WorkingDirectory $GameRoot -WindowStyle Hidden
-        $launched = $true
-    } catch { }
-}
-
-# B) Injection doorstop via winhttp.dll (auto-injection Windows DLL search)
-if (-not $launched -and (Test-Path $winhttpDll) -and ((Test-Path $doorstopIni) -or (Test-Path $doorstopNew))) {
-    try {
-        Start-Process -FilePath $GameExe -WorkingDirectory $GameRoot
-        $launched = $true
-    } catch { }
-}
-
-# C) Steam URL fallback (respecte les Launch Options Steam, y compris
-#    run_bepinex.bat %command% configuré côté plateforme)
-$steamAppId = 2527670  # MiSide
-if (-not $launched) {
-    try {
-        Start-Process -FilePath ""steam://rungameid/$steamAppId""
-        $launched = $true
-    } catch { }
-}
-
-# D) Dernier recours : EXE direct (peut démarrer sans BepInEx).
-if (-not $launched) {
-    try {
-        Start-Process -FilePath $GameExe -WorkingDirectory $GameRoot
-        Start-Sleep -Milliseconds 1000
-        [System.Windows.Forms.MessageBox]::Show(
-            ""MiSide Together updated successfully, but the game was relaunched without BepInEx auto-injection. If the mod overlay does not appear, please close MiSide and relaunch via Steam normally."",
-            ""MiSide Together"") | Out-Null
-    } catch { }
-}
+# Log debug.
+try {
+    $logFile = Join-Path $GameRoot 'BepInEx\LogOutput.txt'
+    $logDir  = Split-Path $logFile -Parent
+    if (Test-Path $logDir) {
+        Add-Content -Path $logFile -Value ""[MiSideCoop AutoUpdater] Update extracted. User must relaunch manually."" -ErrorAction SilentlyContinue
+    }
+} catch { }
 ";
 
         // ─────────────────────────────────────────────────────────────────────

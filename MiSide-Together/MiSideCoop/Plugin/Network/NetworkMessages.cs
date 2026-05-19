@@ -63,6 +63,30 @@ namespace MiSideCoop.Network
         public int   AnimatorStateHash;
         public float AnimatorNormalizedTime;
 
+        // v1.6.0 — VRAIS noms de params Animator MiSide découverts par
+        // AnimatorDiagPatch (intercept SetFloat sur 'Person' Animator local) :
+        //   • 'Forward' — composante signée du mouvement local AVANT/ARRIÈRE
+        //   • 'Right'   — composante signée du mouvement local GAUCHE/DROITE
+        // Ils pilotent le blend tree MiSide ('Person' Animator) qui décide
+        // de Idle ↔ Walk ↔ Run ↔ StrafeLeft ↔ etc. Sans ces deux floats, le
+        // ghost reste figé en T-pose même si le hash est synchronisé, car le
+        // controller des states de mouvement attend ces inputs vivants.
+        public float MoveForward;
+        public float MoveRight;
+
+        // v1.6.1 — Head bone local rotation. Le head MiSide est piloté en
+        // MOUSE LOOK direct (rotation appliquée sur l'os 'Head' hors Animator),
+        // donc Animator.Play(hash) ne reproduit PAS l'inclinaison de la tête
+        // du peer. On capture localRotation sur le sender et on l'écrase APRÈS
+        // Animator.Update sur le receiver pour overrider toute anim qui
+        // toucherait au head bone.
+        public Quaternion HeadRotation;
+
+        // v1.6.1 — Bool 'Sit' (crouch/sit pose) capturé via AnimatorDiagPatch
+        // log v1.5.9 : "anim-patch SetBool: on='Person' param='Sit' value=...".
+        // C'est le seul vrai bool MiSide pour le crouch.
+        public bool IsCrouching;
+
         public MsgId Id => MsgId.PlayerState;
 
         public void Write(BinaryWriter w)
@@ -73,6 +97,13 @@ namespace MiSideCoop.Network
             w.Write(PlayerName ?? string.Empty);
             w.Write(AnimatorStateHash);
             w.Write(AnimatorNormalizedTime);
+            // v1.6.0 — appended fields. Old clients won't read them
+            // (graceful — EndOfStream in Read is caught below).
+            w.Write(MoveForward);
+            w.Write(MoveRight);
+            // v1.6.1 — appended fields (head bone rotation + crouch bool).
+            w.Write(HeadRotation);
+            w.Write(IsCrouching);
         }
         public void Read(BinaryReader r)
         {
@@ -83,6 +114,12 @@ namespace MiSideCoop.Network
             PlayerName = r.ReadString();
             AnimatorStateHash = r.ReadInt32();
             AnimatorNormalizedTime = r.ReadSingle();
+            // v1.6.0 — backward-compat : optional appended fields.
+            try { MoveForward = r.ReadSingle(); } catch { MoveForward = 0f; }
+            try { MoveRight   = r.ReadSingle(); } catch { MoveRight   = 0f; }
+            // v1.6.1 — backward-compat : optional appended fields.
+            try { HeadRotation = r.ReadQuaternion(); } catch { HeadRotation = Quaternion.identity; }
+            try { IsCrouching  = r.ReadBoolean();    } catch { IsCrouching  = false; }
         }
     }
 

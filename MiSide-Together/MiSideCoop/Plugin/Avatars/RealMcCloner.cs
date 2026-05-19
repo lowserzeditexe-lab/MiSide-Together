@@ -59,15 +59,61 @@ namespace MiSideCoop.Avatars
                 Vector3    srcPos = cloneSource.transform.position;
                 Quaternion srcRot = cloneSource.transform.rotation;
 
-                var clone = UnityEngine.Object.Instantiate(cloneSource);
-                if (clone == null)
+                // v1.6.5 — INACTIVE-HOLDER PATTERN POUR BLOQUER L'AWAKE DES HAND-ITEMS
+                //
+                // Problème v1.6.4 : si la source a un hand-item ACTIF au moment du
+                // clone (ex: l'utilisateur tient le téléphone), Instantiate copie
+                // l'état actif → Awake() fire IMMÉDIATEMENT sur le clone pendant
+                // Object.Instantiate → singleton override avant qu'on puisse réagir
+                // → l'objet local "saute" sur la main du ghost (cf. screenshot user
+                // v1.6.4 : Phone visible sur le ghost au lieu du host).
+                //
+                // Solution : Instantiate dans un parent INACTIF (SetActive(false)).
+                // En Unity, les composants d'un GameObject dont activeInHierarchy
+                // est false n'exécutent PAS Awake/OnEnable. On peut alors désactiver
+                // les hand-items un par un AVANT d'unparent → quand on déparente le
+                // clone (qui s'active), seuls les non-hand-items font leur Awake.
+                //
+                // Différence vs v1.6.1 : on utilise SetActive(false) plutôt que
+                // DestroyImmediate. SetActive n'enlève AUCUN GO ni script, donc
+                // pas de régression sur les enfants accessoires (head/arms/etc.)
+                // qui auraient pu être (mal-)parentés sous les hand-items.
+                // Le StripHandItems(safety-net) en fin de StripInterferingComponents
+                // se chargera ensuite de Destroy(GO) (sur des GOs déjà inactifs,
+                // donc 100% safe — aucun Awake n'aura tourné).
+                GameObject holder = null;
+                GameObject clone;
+                try
                 {
-                    MiSideCoopPlugin.Logger?.LogWarning(
-                        "[Co-op] RealMcCloner: Instantiate returned null. Fall back to synthetic.");
-                    return null;
+                    holder = new GameObject("__MiSideCoopCloneHolder__");
+                    holder.SetActive(false);
+                    clone = UnityEngine.Object.Instantiate(cloneSource, holder.transform);
+                    if (clone == null)
+                    {
+                        MiSideCoopPlugin.Logger?.LogWarning(
+                            "[Co-op] RealMcCloner: Instantiate returned null. Fall back to synthetic.");
+                        try { UnityEngine.Object.Destroy(holder); } catch { }
+                        return null;
+                    }
+                    clone.name = goName;
+
+                    // Désactive les hand-items du clone PENDANT qu'il est dans
+                    // le holder inactif (donc avant tout Awake). Quand on
+                    // unparente le clone juste après, ces GOs resteront inactifs
+                    // → leur Awake/OnEnable ne se déclencheront jamais.
+                    DeactivateHandItemsInHierarchy(clone);
+
+                    // Déparente vers la scène (le clone devient actif → Awake
+                    // fire sur les composants non-hand-item).
+                    clone.transform.SetParent(null, true);
                 }
-                clone.name = goName;
-                clone.transform.SetParent(null, true);
+                finally
+                {
+                    if (holder != null)
+                    {
+                        try { UnityEngine.Object.Destroy(holder); } catch { }
+                    }
+                }
 
                 clone.transform.position = srcPos + new Vector3(1.2f, 0f, 0f);
                 clone.transform.rotation = srcRot;
@@ -75,6 +121,29 @@ namespace MiSideCoop.Avatars
                 // Strip défensif + re-activation + re-layer + prep animator.
                 StripInterferingComponents(clone);
                 PrepareGhostAnimator(clone);
+
+                // v1.6.0 — Sort le clone de la T-pose initiale en forçant un
+                // Rebind + Update(0) sur tous les Animators. Sans ça, l'Animator
+                // cloné par Instantiate démarre parfois sur l'état Entry sans
+                // avoir évalué le default state du controller → bind pose = T-pose.
+                try
+                {
+                    var anims = clone.transform.GetComponentsInChildrenSafe<Animator>(true);
+                    foreach (var a in anims)
+                    {
+                        if (a == null) continue;
+                        try { a.Rebind();     } catch { }
+                        try { a.Update(0f);  } catch { }
+                    }
+                    MiSideCoopPlugin.Logger?.LogInfo(
+                        $"[Co-op] RealMcCloner: kicked {anims.Length} animator(s) out of T-pose "
+                      + "(Rebind + Update(0) — v1.6.0).");
+                }
+                catch (Exception ex)
+                {
+                    MiSideCoopPlugin.Logger?.LogWarning(
+                        $"[Co-op] RealMcCloner.RebindKick: {ex.Message}");
+                }
 
                 try { UnityEngine.Object.DontDestroyOnLoad(clone); }
                 catch (Exception ex)
@@ -314,19 +383,49 @@ namespace MiSideCoop.Avatars
             }
 
             // v1.5.1 — Ré-activation des GameObjects désactivés (tête, cheveux…)
+            //
+            // v1.6.4 — FIX CRITIQUE : exclure les hand-items (Tetris, GameBoy,
+            // phone, etc.) de cette ré-activation. Sur le MC local, ces GOs
+            // sont normalement INACTIFS (l'utilisateur n'est pas en mini-jeu).
+            // Instantiate clone cet état → clone hérite hand-item inactif →
+            // Awake() ne fire pas → leur singleton (ex: `Tetris.Instance = this`)
+            // ne se déclenche pas → le Tetris du joueur local reste référencé.
+            //
+            // BUG v1.5.1–v1.6.3 : la boucle re-activait AVEUGLÉMENT tous les
+            // GOs inactifs, y compris Tetris/Tetris Game. Awake() firait sur
+            // le clone → singleton volé → Tetris.Instance pointait sur le
+            // clone → quand StripHandItems destroyait le clone, Instance
+            // devenait Unity-null → l'objet disparaissait des mains du joueur
+            // local (cf. screenshot user v1.6.3 : mains vides en co-op).
             try
             {
-                int activated = 0;
+                int activated = 0, skippedHand = 0;
                 ForEachChildTransform(root.transform, child =>
                 {
                     if (child == null || child.gameObject == null) return;
-                    if (!child.gameObject.activeSelf)
+                    if (child.gameObject.activeSelf) return;
+
+                    // v1.6.4 — Skip hand-items pour préserver le singleton local.
+                    string n = string.Empty;
+                    try { n = child.gameObject.name; } catch { }
+                    if (!string.IsNullOrEmpty(n))
                     {
-                        try { child.gameObject.SetActive(true); activated++; } catch { }
+                        var lo = n.ToLowerInvariant();
+                        foreach (var kw in HandItemKeywords)
+                        {
+                            if (lo.Contains(kw))
+                            {
+                                skippedHand++;
+                                return; // ne ré-active PAS — Awake ne firera pas
+                            }
+                        }
                     }
+
+                    try { child.gameObject.SetActive(true); activated++; } catch { }
                 });
                 MiSideCoopPlugin.Logger?.LogInfo(
-                    $"[Co-op] RealMcCloner: re-activated {activated} hidden child GameObject(s) on clone.");
+                    $"[Co-op] RealMcCloner: re-activated {activated} hidden child GameObject(s) on clone "
+                  + $"(skipped {skippedHand} hand-item(s) to preserve local singleton — v1.6.4).");
             }
             catch (Exception ex)
             {
@@ -454,36 +553,21 @@ namespace MiSideCoop.Avatars
             }
 
             // ============================================================
-            // StripHandItems v1.5.8 - MOVED HERE (after re-activation)
+            // StripHandItems v1.6.1 — SAFETY NET seulement
             // ============================================================
-            // Strip hand-held items (GameBoy/Tetris/phone) from the ghost.
-            //
-            // v1.5.6 ran this BEFORE v1.5.1's re-activation step. Result:
-            // items that were inactive in the source (Tetris MR is inactive
-            // when the player is not playing the mini-game) were skipped by
-            // the strip (activeSelf was false), then re-activated by v1.5.1
-            // -> visible on the ghost. Now we run it LAST so we hide items
-            // regardless of their original state.
-            //
-            // v1.5.8 also: disables item regardless of current activeSelf
-            // state. Targets both parent GO (e.g. 'Tetris') and any child
-            // matching the keyword (e.g. 'TetrisGame'). Disables MeshRenderer
-            // and SkinnedMeshRenderer on the matched GO directly as a
-            // belt-and-suspenders measure in case SetActive(false) is
-            // overridden by a script later.
+            // Le vrai strip se fait dans DestroyHandItemsBeforeAwake() AVANT
+            // que le clone soit activé (suppress Awake → pas d'override
+            // singleton). Ce strip post-activation reste comme safety-net
+            // au cas où un hand-item aurait été créé dynamiquement par un
+            // script entre l'activation et ce point (rare).
             try
             {
-                string[] handItemKeywords =
-                {
-                    "gameboy", "tetris", "phone", "device", "console",
-                    "handitem", "righthand_item", "lefthand_item",
-                    "item_r", "item_l", "holdingitem", "carry"
-                };
+                string[] handItemKeywords = HandItemKeywords;
                 int strippedItems = 0;
                 ForEachChildTransform(root.transform, child =>
                 {
                     if (child == null || child.gameObject == null) return;
-                    if (child == root.transform) return; // never the root
+                    if (child == root.transform) return;
                     var n = child.gameObject.name;
                     if (string.IsNullOrEmpty(n)) return;
                     var lo = n.ToLowerInvariant();
@@ -493,35 +577,156 @@ namespace MiSideCoop.Avatars
                         {
                             try
                             {
-                                // Disable the GO unconditionally (v1.5.8).
                                 child.gameObject.SetActive(false);
-                                // And disable any direct renderers as a safety net.
-                                try
-                                {
-                                    var mr  = child.gameObject.GetComponent<MeshRenderer>();
-                                    if (mr  != null) mr.enabled  = false;
-                                } catch { }
-                                try
-                                {
-                                    var smr = child.gameObject.GetComponent<SkinnedMeshRenderer>();
-                                    if (smr != null) smr.enabled = false;
-                                } catch { }
+                                try { UnityEngine.Object.Destroy(child.gameObject); } catch { }
                                 strippedItems++;
                                 MiSideCoopPlugin.Logger?.LogInfo(
-                                    $"[Co-op]   StripHandItems: hidden '{n}' (kw='{kw}').");
+                                    $"[Co-op]   StripHandItems(safety-net): destroyed '{n}' (kw='{kw}').");
                             }
                             catch { }
                             break;
                         }
                     }
                 });
-                MiSideCoopPlugin.Logger?.LogInfo(
-                    $"[Co-op] RealMcCloner: stripped {strippedItems} hand-item GameObject(s).");
+                if (strippedItems > 0)
+                {
+                    MiSideCoopPlugin.Logger?.LogInfo(
+                        $"[Co-op] RealMcCloner: safety-net destroyed {strippedItems} late hand-item(s).");
+                }
             }
             catch (Exception ex)
             {
                 MiSideCoopPlugin.Logger?.LogWarning(
-                    $"[Co-op] RealMcCloner.StripHandItems(post): {ex.Message}");
+                    $"[Co-op] RealMcCloner.StripHandItems(safety-net): {ex.Message}");
+            }
+        }
+
+        // v1.6.1 — Liste centralisée des mots-clés hand-item.
+        // Conservée minimale pour éviter de matcher des bones (ex: "Hand_R"
+        // doit rester, donc on ne met PAS "hand" tout court).
+        private static readonly string[] HandItemKeywords =
+        {
+            "gameboy", "tetris", "phone", "device", "console",
+            "handitem", "righthand_item", "lefthand_item",
+            "item_r", "item_l", "holdingitem", "carry"
+        };
+
+        // v1.6.5 — Désactive (SetActive(false)) tous les hand-items dans la
+        // hiérarchie du clone. Doit être appelé PENDANT que le clone est dans
+        // le holder inactif (avant tout Awake). Garantit que ces GOs restent
+        // inactifs après l'unparent → leur Awake/OnEnable ne fire jamais.
+        //
+        // Différence avec DestroyHandItemsBeforeAwake : on ne SUPPRIME pas le
+        // GO (qui pourrait contenir des enfants accessoires mal-parentés —
+        // régression v1.6.1), on le rend juste inactif. Le safety-net
+        // StripHandItems en fin de StripInterferingComponents Destroy()era
+        // ensuite ces GOs sans risque (déjà inactifs).
+        private static void DeactivateHandItemsInHierarchy(GameObject clone)
+        {
+            if (clone == null) return;
+            try
+            {
+                int deactivated = 0, alreadyInactive = 0;
+                ForEachChildTransform(clone.transform, child =>
+                {
+                    if (child == null || child.gameObject == null) return;
+                    if (child == clone.transform) return;
+                    var n = child.gameObject.name;
+                    if (string.IsNullOrEmpty(n)) return;
+                    var lo = n.ToLowerInvariant();
+                    foreach (var kw in HandItemKeywords)
+                    {
+                        if (lo.Contains(kw))
+                        {
+                            if (child.gameObject.activeSelf)
+                            {
+                                try { child.gameObject.SetActive(false); deactivated++; } catch { }
+                            }
+                            else
+                            {
+                                alreadyInactive++;
+                            }
+                            break;
+                        }
+                    }
+                });
+                MiSideCoopPlugin.Logger?.LogInfo(
+                    $"[Co-op] RealMcCloner: deactivated {deactivated} active hand-item(s) "
+                  + $"+ {alreadyInactive} already-inactive hand-item(s) on clone — "
+                  + "Awake suppressed, source singletons preserved (v1.6.5).");
+            }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    $"[Co-op] RealMcCloner.DeactivateHandItemsInHierarchy: {ex.Message}");
+            }
+        }
+
+        // v1.6.1 — Détruit les hand-items du clone AVANT son activation,
+        // donc AVANT que leurs Awake() / OnEnable() ne soient appelés.
+        // C'est la clé du fix "Gameboy invisible" : si un script Tetris
+        // fait `Instance = this` dans Awake, le clone overriderait Instance.
+        // En détruisant le GO AVANT Awake, ce script n'existe plus.
+        //
+        // Appelé pendant que `clone.activeInHierarchy == false` (clone est
+        // dans un holder désactivé).
+        private static void DestroyHandItemsBeforeAwake(GameObject clone)
+        {
+            if (clone == null) return;
+            try
+            {
+                int count = 0;
+                var toDestroy = new System.Collections.Generic.List<GameObject>();
+                ForEachChildTransform(clone.transform, child =>
+                {
+                    if (child == null || child.gameObject == null) return;
+                    if (child == clone.transform) return;
+                    var n = child.gameObject.name;
+                    if (string.IsNullOrEmpty(n)) return;
+                    var lo = n.ToLowerInvariant();
+                    foreach (var kw in HandItemKeywords)
+                    {
+                        if (lo.Contains(kw))
+                        {
+                            toDestroy.Add(child.gameObject);
+                            break;
+                        }
+                    }
+                });
+                foreach (var go in toDestroy)
+                {
+                    if (go == null) continue;
+                    string nm = string.Empty;
+                    try { nm = go.name; } catch { }
+                    try
+                    {
+                        // DestroyImmediate ici car on est dans un contexte
+                        // d'init synchrone, et le clone n'a pas encore tourné
+                        // une frame. C'est documenté safe par Unity dans ce
+                        // cas précis (objet pas activé).
+                        UnityEngine.Object.DestroyImmediate(go);
+                        count++;
+                    }
+                    catch
+                    {
+                        // Fallback Destroy (asynchrone) si DestroyImmediate
+                        // est restreint (ex: appelé pendant un OnValidate).
+                        try { UnityEngine.Object.Destroy(go); count++; } catch { }
+                    }
+                    if (!string.IsNullOrEmpty(nm))
+                    {
+                        MiSideCoopPlugin.Logger?.LogInfo(
+                            $"[Co-op]   DestroyHandItemsBeforeAwake: removed '{nm}' before Awake (v1.6.1).");
+                    }
+                }
+                MiSideCoopPlugin.Logger?.LogInfo(
+                    $"[Co-op] RealMcCloner: pre-Awake destroyed {count} hand-item(s) — "
+                  + "singletons on the source remain intact (v1.6.1).");
+            }
+            catch (Exception ex)
+            {
+                MiSideCoopPlugin.Logger?.LogWarning(
+                    $"[Co-op] RealMcCloner.DestroyHandItemsBeforeAwake: {ex.Message}");
             }
         }
 

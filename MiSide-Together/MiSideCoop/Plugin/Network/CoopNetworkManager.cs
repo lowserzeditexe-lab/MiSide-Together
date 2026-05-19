@@ -198,26 +198,18 @@ namespace MiSideCoop.Network
             MonoBehaviour localAvatar = _isHost ? (MonoBehaviour)_player1 : _player2;
             if (localAvatar == null) return;
 
-            // v1.5.3 — Chercher prioritairement l'Animator de "Person" (3rd-person
-            // body, avec un controller MiSide complet) plutôt que celui de
-            // "Player Arms" (first-person arms, controller souvent vide).
+            // v1.5.3 → v1.6.0 — Chercher prioritairement l'Animator de "Person"
+            // (3rd-person body, avec un controller MiSide complet) plutôt que
+            // celui de "Player Arms" (first-person arms, controller souvent vide).
             // Le F10 dump (v1.5.2) a confirmé qu'il y a 2 Animators :
             //   • Player/HeadPlayer/Player Arms (controller='')
-            //   • Player/Person (controller MiSide)
+            //   • Player/Person (controller MiSide complet)
             // Le 1er trouvé par GetComponentInChildren est "Player Arms" → mauvais.
-            Animator animator = null;
-            try
-            {
-                var personT = localAvatar.transform.Find("Person")
-                              ?? localAvatar.transform.parent?.Find("Person");
-                if (personT != null) animator = personT.GetComponent<Animator>();
-            }
-            catch { }
-            if (animator == null)
-            {
-                animator = localAvatar.GetComponent<Animator>()
-                        ?? localAvatar.GetComponentInChildrenSafe<Animator>();
-            }
+            //
+            // v1.6.0 — Si Find("Person") échoue (rare), on scanne TOUS les
+            // Animators et on garde celui dont runtimeAnimatorController != null
+            // ET parameterCount > 0 (= controller MiSide valide).
+            Animator animator = ResolvePersonAnimator(localAvatar);
 
             // v1.5.0 — Capture state-hash + normalizedTime pour replay direct.
             int   stateHash = 0;
@@ -235,6 +227,36 @@ namespace MiSideCoop.Network
                 catch { /* ignore — fallback sur stateHash=0 = no-op côté distant */ }
             }
 
+            // v1.6.0 — Sample les VRAIS floats MiSide ('Forward'/'Right') qui
+            // pilotent le blend tree du Person Animator. C'est CE QUE LE JEU
+            // FAIT NORMALEMENT pour piloter l'animation du body 3rd-person.
+            float moveForward = 0f, moveRight = 0f;
+            if (animator != null)
+            {
+                try { moveForward = animator.GetFloat("Forward"); } catch { }
+                try { moveRight   = animator.GetFloat("Right");   } catch { }
+            }
+
+            // v1.6.1 — Sample le bool 'Sit' (crouch/sit pose) capturé via
+            // AnimatorDiagPatch. C'est le seul vrai bool MiSide pour le crouch.
+            bool isCrouching = false;
+            if (animator != null)
+            {
+                try { isCrouching = animator.GetBool("Sit"); } catch { }
+            }
+
+            // v1.6.1 — Sample la localRotation du head bone du MC. En MiSide,
+            // le mouse-look pilote l'os 'Head' (et parents) directement, hors
+            // Animator. Sans cette capture, le ghost a la tête figée droit
+            // devant même si le peer regarde haut/bas/côtés.
+            Quaternion headRot = Quaternion.identity;
+            try
+            {
+                var headBone = ResolveHeadBone(localAvatar.gameObject);
+                if (headBone != null) headRot = headBone.localRotation;
+            }
+            catch { }
+
             var msg = new PlayerStateMessage
             {
                 Position       = localAvatar.transform.position,
@@ -243,10 +265,142 @@ namespace MiSideCoop.Network
                 AnimationState = SampleAnimatorState(animator),
                 LookDirection  = localAvatar.transform.forward,
                 PlayerName     = MiSideCoopPlugin.LocalPlayerName.Value,
-                AnimatorStateHash     = stateHash,
+                AnimatorStateHash      = stateHash,
                 AnimatorNormalizedTime = stateNormTime,
+                MoveForward    = moveForward,
+                MoveRight      = moveRight,
+                HeadRotation   = headRot,
+                IsCrouching    = isCrouching,
             };
             _tx.Send(msg);
+
+            // v1.6.3 — Throttled sender-side diagnostic log (mirror du log
+            // côté receiver dans PlayerAvatar.ApplyRemoteState). Permet de
+            // valider d'un seul coup d'œil que le sender sample bien sur le
+            // bon Animator (vrais hashes != 0, Forward/Right non nuls quand
+            // on bouge). Cadence ≈ 60 messages = ~3s à 20 Hz.
+            _sendDiagCount++;
+            if ((_sendDiagCount % 60) == 1)
+            {
+                string animName = "<null>", ctrlName = "<null>";
+                if (animator != null)
+                {
+                    try { animName  = animator.gameObject.name; } catch { }
+                    try { ctrlName  = animator.runtimeAnimatorController?.name ?? "<null>"; } catch { }
+                }
+                MiSideCoopPlugin.Logger?.LogInfo(
+                    $"[Co-op] send-diag '{msg.PlayerName}' #{_sendDiagCount}: "
+                  + $"animGO='{animName}' ctrl='{ctrlName}' "
+                  + $"hash={stateHash} normT={stateNormTime:F2} "
+                  + $"fwd={moveForward:F2} right={moveRight:F2} speed={msg.MoveSpeed:F2} "
+                  + $"sit={isCrouching} state='{msg.AnimationState}'");
+            }
+        }
+
+        // v1.6.3 — Compteur pour le diag log sender (throttled).
+        private int _sendDiagCount;
+
+        // v1.6.1 — Trouve l'os 'Head' (ou variantes) dans la hiérarchie du MC.
+        // Cache compatible avec re-spawn de scène — appelé à chaque tick mais
+        // GetComponentsInChildren reste rapide pour ~50 transforms.
+        // Noms candidats : "Head" (Mixamo / Unity Humanoid), "head", "HeadCC",
+        // "mixamorig:Head", "Bip01 Head", "Player Head", etc.
+        private static readonly string[] HeadBoneNames =
+        {
+            "Head", "head", "HeadCC", "Head_M", "HeadBone",
+            "mixamorig:Head", "mixamorig:head",
+            "Bip01 Head", "Bip01_Head",
+            "Player Head", "PlayerHead",
+        };
+        private static Transform ResolveHeadBone(GameObject root)
+        {
+            if (root == null) return null;
+            try
+            {
+                var transforms = root.transform.GetComponentsInChildrenSafe<Transform>(true);
+                // 1) Match exact (case-sensitive sur noms communs)
+                foreach (var t in transforms)
+                {
+                    if (t == null) continue;
+                    string n = null;
+                    try { n = t.gameObject.name; } catch { }
+                    if (string.IsNullOrEmpty(n)) continue;
+                    foreach (var cand in HeadBoneNames)
+                    {
+                        if (n == cand) return t;
+                    }
+                }
+                // 2) Match approximatif : contient "head" (en lowercase)
+                foreach (var t in transforms)
+                {
+                    if (t == null) continue;
+                    string n = null;
+                    try { n = t.gameObject.name; } catch { }
+                    if (string.IsNullOrEmpty(n)) continue;
+                    var lo = n.ToLowerInvariant();
+                    // évite "headphones", "headset", "headpiece"
+                    if ((lo == "head" || lo.EndsWith(":head") || lo.EndsWith("_head") || lo.EndsWith(" head"))
+                        && !lo.Contains("phone") && !lo.Contains("set"))
+                        return t;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        // v1.6.0 — Résolution robuste de l'Animator 'Person' (controller MiSide
+        // complet). Le MC MiSide a typiquement 2 Animators : 'Player Arms' (FPS
+        // arms, controller souvent vide) et 'Person' (body 3rd-person, controller
+        // MiSide). On ne veut que le second.
+        private static Animator ResolvePersonAnimator(MonoBehaviour localAvatar)
+        {
+            // 1) Match direct via Find("Person")
+            try
+            {
+                var personT = localAvatar.transform.Find("Person")
+                              ?? localAvatar.transform.parent?.Find("Person");
+                if (personT != null)
+                {
+                    var a = personT.GetComponent<Animator>();
+                    if (a != null) return a;
+                }
+            }
+            catch { }
+
+            // 2) Scanne tous les Animators et garde celui qui a un controller
+            //    valide ET au moins 1 paramètre.
+            try
+            {
+                var all = localAvatar.GetComponentsInChildrenSafe<Animator>(true);
+                Animator best = null;
+                foreach (var a in all)
+                {
+                    if (a == null) continue;
+                    bool hasCtrl = false;
+                    int  pc      = 0;
+                    try { hasCtrl = a.runtimeAnimatorController != null; } catch { }
+                    try { pc      = a.parameterCount; }                    catch { }
+                    if (hasCtrl && pc > 0)
+                    {
+                        // Préfère explicitement celui sur un GO 'Person*'.
+                        var goName = string.Empty;
+                        try { goName = a.gameObject.name; } catch { }
+                        if (goName != null && goName.StartsWith("Person"))
+                            return a;
+                        if (best == null) best = a;
+                    }
+                }
+                if (best != null) return best;
+            }
+            catch { }
+
+            // 3) Dernier recours : n'importe quel Animator.
+            try
+            {
+                return localAvatar.GetComponent<Animator>()
+                       ?? localAvatar.GetComponentInChildrenSafe<Animator>();
+            }
+            catch { return null; }
         }
 
         // ── Handlers de connexion ────────────────────────────────────────────
@@ -819,6 +973,17 @@ namespace MiSideCoop.Network
         private static float SampleAnimatorSpeed(Animator anim)
         {
             if (anim == null) return 0f;
+            // v1.6.0 — En MiSide, les vrais params sont 'Forward' et 'Right'.
+            // Magnitude = sqrt(f² + r²) → vraie vitesse.
+            try
+            {
+                float f = 0f, r = 0f;
+                try { f = anim.GetFloat("Forward"); } catch { }
+                try { r = anim.GetFloat("Right");   } catch { }
+                if (f != 0f || r != 0f)
+                    return Mathf.Sqrt(f * f + r * r);
+            }
+            catch { }
             string[] candidates = { "Speed", "MoveSpeed", "Velocity", "BlendSpeed" };
             foreach (var c in candidates)
             {
