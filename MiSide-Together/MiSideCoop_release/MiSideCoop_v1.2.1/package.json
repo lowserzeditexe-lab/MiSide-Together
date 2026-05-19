@@ -1,0 +1,1 @@
+{"name":"miside-coop-relay","version":"1.0.0","main":"relay-server.js","scripts":{"start":"node relay-server.js"},"dependencies":{"express":"^4.19.0"}}
